@@ -27,15 +27,16 @@ def test_login_page_served(client):
     assert "text/html" in resp.headers["content-type"]
 
 
-def test_root_page_served(client):
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
+def test_root_redirects_unauthenticated(client):
+    # M2 auth gate: unauthenticated -> /login. Disable follow_redirects to see the 302.
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 302
+    assert "/login" in resp.headers.get("location", "")
 
 
-def test_convert_page_served(client):
-    resp = client.get("/convert")
-    assert resp.status_code == 200
+def test_convert_redirects_unauthenticated(client):
+    resp = client.get("/convert", follow_redirects=False)
+    assert resp.status_code == 302
 
 
 def test_sw_js_served_with_header(client):
