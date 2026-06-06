@@ -191,6 +191,25 @@ robust (no Cloudflare/HTML scraping). Without it, AA falls back to HTML search.
 5. Leave the `cloudflared` service in `docker-compose.yml` enabled and remove the
    app's published port (see BUILD.md §11.3).
 
+### Option B: Tailscale (no Cloudflare account needed)
+
+If you already run Tailscale on your devices, you can expose BookHub exclusively
+on the Tailnet instead of a public Cloudflare tunnel.
+
+1. Install the Tailscale client inside the VM: `curl -fsSL https://tailscale.com/install.sh | sh`.
+2. `sudo tailscale up --advertise-tags=tag:bookhub` (creates a machine auth key
+   in the admin console if using ACL tags).
+3. The app only needs to listen on `127.0.0.1:8000` (or `0.0.0.0:8000` if you
+   bind it to the Tailscale interface). Remove the published port from
+   `docker-compose.yml` and point your browser at `http://<tailscale-hostname>:8000`.
+4. **Tailscale ACLs:** restrict access to the `tag:bookhub` machine so only your
+   listed users/devices can reach it.
+5. Remove the `cloudflared` service from `docker-compose.yml` if using Tailscale
+   exclusively.
+
+> Keep `COOKIE_SECURE=false` with plain Tailscale HTTP (no TLS termination) or
+> add a local nginx/Caddy reverse proxy in front if you want `Secure` cookies.
+
 ---
 
 ## Build and run
