@@ -8,7 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/tmp \
     MPLCONFIGDIR=/tmp/mpl
 
-RUN adduser --system --uid 10001 --no-create-home bookhub \
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && adduser --system --uid 10001 --no-create-home bookhub \
     && mkdir -p /data \
     && chown 10001:10001 /data
 
