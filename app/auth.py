@@ -11,6 +11,10 @@ from app.db import get_db, write_db
 
 _ph = PasswordHasher()
 
+# Pre-computed dummy hash used to keep login response time constant for
+# unknown usernames (prevents timing-based user enumeration).
+_DUMMY_HASH = _ph.hash("x")
+
 SESSION_TTL_DAYS = 30
 _RATE_WINDOW_S = 60
 _RATE_MAX_FAILURES = 5
@@ -44,30 +48,39 @@ def _clear_rate_limits() -> None:
     _failure_timestamps.clear()
 
 
-async def check_rate_limit(key: str) -> None:
-    """Raise 429 if >= 5 login failures in the past 60 s for this key."""
+async def check_rate_limit(rl_key: str) -> None:
+    """Raise 429 if >= 5 failures in the past 60 s for this key."""
     async with _rl_lock:
         now = time.monotonic()
-        recent = [t for t in _failure_timestamps.get(key, []) if now - t < _RATE_WINDOW_S]
-        _failure_timestamps[key] = recent
+        recent = [t for t in _failure_timestamps.get(rl_key, []) if now - t < _RATE_WINDOW_S]
+        _failure_timestamps[rl_key] = recent
         if len(recent) >= _RATE_MAX_FAILURES:
             raise HTTPException(status_code=429, detail="Too many login attempts, try again later")
 
 
-async def record_login_failure(key: str) -> None:
+async def record_login_failure(rl_key: str) -> None:
     async with _rl_lock:
         now = time.monotonic()
-        bucket = _failure_timestamps.get(key, [])
+        bucket = _failure_timestamps.get(rl_key, [])
         bucket.append(now)
-        _failure_timestamps[key] = [t for t in bucket if now - t < _RATE_WINDOW_S]
+        _failure_timestamps[rl_key] = [t for t in bucket if now - t < _RATE_WINDOW_S]
+
+
+async def reset_rate_limit(rl_key: str) -> None:
+    """Clear the failure bucket for this key on successful login."""
+    async with _rl_lock:
+        _failure_timestamps.pop(rl_key, None)
 
 
 # --- Sessions ---
 
 async def create_session(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
+    now_iso = datetime.now(timezone.utc).isoformat()
     expires_at = (datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)).isoformat()
     async with write_db() as db:
+        # Opportunistically prune expired sessions to keep the table lean.
+        await db.execute("DELETE FROM sessions WHERE expires_at <= ?", (now_iso,))
         await db.execute(
             "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
             (token, user_id, expires_at),

@@ -1,8 +1,13 @@
 """M2 auth tests: sessions, argon2, admin CRUD, must-change flow, rate limit."""
+import secrets
+import time
+
 import pytest
 from starlette.testclient import TestClient
 
 from app import auth as _auth
+from app.config import settings as _settings
+from app.db import write_db, get_db
 from app.main import app
 
 ADMIN_PW = "testpassword123"
@@ -48,6 +53,16 @@ def test_login_sets_httponly_cookie(client):
     resp = client.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PW})
     raw = resp.headers.get("set-cookie", "")
     assert "httponly" in raw.lower()
+
+
+def test_cookie_secure_flag(client, monkeypatch):
+    monkeypatch.setattr(_settings, "COOKIE_SECURE", True)
+    resp = client.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PW})
+    assert "; secure" in resp.headers.get("set-cookie", "").lower()
+
+    monkeypatch.setattr(_settings, "COOKIE_SECURE", False)
+    resp2 = client.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PW})
+    assert "; secure" not in resp2.headers.get("set-cookie", "").lower()
 
 
 def test_logout_clears_session(client):
@@ -122,6 +137,15 @@ def test_create_user_duplicate_rejected(client, admin_token):
     assert resp.status_code == 409
 
 
+def test_create_user_short_password_rejected(client, admin_token):
+    resp = client.post(
+        "/api/admin/users",
+        cookies=_cookies(admin_token),
+        json={"username": "shortpw_user", "password": "abc", "is_admin": False},
+    )
+    assert resp.status_code == 400
+
+
 def test_admin_cannot_delete_self(client, admin_token):
     users = client.get("/api/admin/users", cookies=_cookies(admin_token)).json()
     admin_id = next(u["id"] for u in users if u["username"] == "admin")
@@ -147,6 +171,39 @@ def test_create_and_delete_user(client, admin_token):
         "/api/auth/login", json={"username": "temp_del_user", "password": "temppassword1"}
     )
     assert resp3.status_code == 401
+
+
+def test_delete_cascade_invalidates_sessions(client, admin_token):
+    resp = client.post(
+        "/api/admin/users",
+        cookies=_cookies(admin_token),
+        json={"username": "cascade_user", "password": "cascadepass1", "is_admin": False},
+    )
+    user_id = resp.json()["id"]
+
+    resp2 = client.post(
+        "/api/auth/login", json={"username": "cascade_user", "password": "cascadepass1"}
+    )
+    user_token = resp2.cookies["session"]
+
+    # Delete the user - cascade should remove their sessions.
+    client.delete(f"/api/admin/users/{user_id}", cookies=_cookies(admin_token))
+
+    # Token T must now be rejected.
+    resp3 = client.get("/api/admin/users", cookies=_cookies(user_token))
+    assert resp3.status_code == 401
+
+
+async def test_expired_session_rejected(client, admin_token):
+    expired_token = "expired_" + secrets.token_hex(12)
+    async with write_db() as db:
+        await db.execute(
+            "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, 1, '2020-01-01T00:00:00+00:00')",
+            (expired_token,),
+        )
+
+    resp = client.get("/api/admin/users", cookies={"session": expired_token})
+    assert resp.status_code == 401
 
 
 # --- must_change_password flow ---
@@ -176,7 +233,7 @@ def test_must_change_flow(client, admin_token):
 
     # Normal API routes blocked until password changed.
     resp3 = client.get("/api/admin/users", cookies=_cookies(mcp_token))
-    assert resp3.status_code in (401, 403)
+    assert resp3.status_code == 403
 
     # change-password itself is exempt from the block.
     resp4 = client.post(
@@ -194,6 +251,79 @@ def test_must_change_flow(client, admin_token):
     assert resp5.json()["must_change_password"] is False
 
 
+def test_must_change_page_redirect(client, admin_token):
+    resp = client.post(
+        "/api/admin/users",
+        cookies=_cookies(admin_token),
+        json={"username": "mcp_page_user", "password": "mcppagepass1", "is_admin": False},
+    )
+    user_id = resp.json()["id"]
+
+    client.post(
+        f"/api/admin/users/{user_id}/reset-password",
+        cookies=_cookies(admin_token),
+        json={"new_password": "mcptemppass1"},
+    )
+
+    resp2 = client.post(
+        "/api/auth/login", json={"username": "mcp_page_user", "password": "mcptemppass1"}
+    )
+    mcp_token = resp2.cookies["session"]
+
+    # GET "/" must redirect to /change-password for must_change users.
+    resp3 = client.get("/", follow_redirects=False, cookies=_cookies(mcp_token))
+    assert resp3.status_code == 302
+    assert resp3.headers.get("location") == "/change-password"
+
+    # GET "/change-password" must be accessible (200).
+    resp4 = client.get("/change-password", follow_redirects=False, cookies=_cookies(mcp_token))
+    assert resp4.status_code == 200
+
+
+def test_change_password_kills_other_sessions(client, admin_token):
+    resp = client.post(
+        "/api/admin/users",
+        cookies=_cookies(admin_token),
+        json={"username": "pwchange_user", "password": "pwchangepass1", "is_admin": False},
+    )
+    user_id = resp.json()["id"]
+
+    # Login twice to get two distinct session tokens.
+    resp_a = client.post(
+        "/api/auth/login", json={"username": "pwchange_user", "password": "pwchangepass1"}
+    )
+    token_a = resp_a.cookies["session"]
+
+    resp_b = client.post(
+        "/api/auth/login", json={"username": "pwchange_user", "password": "pwchangepass1"}
+    )
+    token_b = resp_b.cookies["session"]
+
+    # Change password using session A - should kill session B.
+    resp_cp = client.post(
+        "/api/auth/change-password",
+        cookies=_cookies(token_a),
+        json={"current_password": "pwchangepass1", "new_password": "newpwchange99"},
+    )
+    assert resp_cp.status_code == 200
+
+    # Session B must be dead.
+    resp_b_check = client.post(
+        "/api/auth/change-password",
+        cookies=_cookies(token_b),
+        json={"current_password": "pwchangepass1", "new_password": "anotherpw1234"},
+    )
+    assert resp_b_check.status_code == 401
+
+    # Session A must still be alive.
+    resp_a_check = client.post(
+        "/api/auth/change-password",
+        cookies=_cookies(token_a),
+        json={"current_password": "newpwchange99", "new_password": "finalpassword99"},
+    )
+    assert resp_a_check.status_code == 200
+
+
 def test_change_password_wrong_current(client, admin_token):
     resp = client.post(
         "/api/auth/change-password",
@@ -204,6 +334,20 @@ def test_change_password_wrong_current(client, admin_token):
 
 
 # --- Rate limit ---
+
+def test_rate_limit_window_expiry(client):
+    _auth._clear_rate_limits()
+
+    # Seed 5 failures that are older than the 60 s window.
+    old_ts = time.monotonic() - 70
+    _auth._failure_timestamps["testclient:admin"] = [old_ts] * 5
+
+    # Old failures pruned during check_rate_limit; login must succeed.
+    resp = client.post("/api/auth/login", json={"username": "admin", "password": ADMIN_PW})
+    assert resp.status_code == 200
+
+    _auth._clear_rate_limits()
+
 
 def test_rate_limit_trips_after_five_failures(client):
     _auth._clear_rate_limits()

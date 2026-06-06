@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -47,10 +48,8 @@ async def create_user(body: CreateUserBody, _user: dict = Depends(auth.require_a
                 (body.username.strip(), password_hash, int(body.is_admin), now),
             )
             user_id = cur.lastrowid
-    except Exception as exc:
-        if "UNIQUE" in str(exc):
-            raise HTTPException(status_code=409, detail="Username already exists")
-        raise
+    except aiosqlite.IntegrityError:
+        raise HTTPException(status_code=409, detail="Username already exists")
 
     return {
         "id": user_id,
