@@ -1,6 +1,7 @@
-"""M3 provider tests: Libgen search parsing, CF detection, filter, mirror fallback."""
+"""M3/M7 provider tests: Libgen, VK, Anna's Archive search, CF detection, filter."""
+import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -202,3 +203,236 @@ def test_parse_size_mb():
 
 def test_parse_size_empty():
     assert _parse_size("") is None
+
+
+# ===========================================================================
+# VK provider tests
+# ===========================================================================
+
+import app.providers.vk as _vk_mod
+
+
+def _vk_response(items):
+    return MagicMock(
+        status_code=200,
+        json=lambda: {"response": {"count": len(items), "items": items}},
+    )
+
+
+def _vk_error_response(code, msg=""):
+    return MagicMock(
+        status_code=200,
+        json=lambda: {"error": {"error_code": code, "error_msg": msg}},
+    )
+
+
+def test_vk_disabled_when_no_token():
+    from app.providers.vk import VKProvider
+    with patch("app.providers.vk.settings") as mock_cfg:
+        mock_cfg.VK_TOKEN = ""
+        p = VKProvider()
+        assert p.enabled is False
+
+
+async def test_vk_search_returns_epub_pdf_only():
+    """VK search filters out non-epub/pdf extensions."""
+    from app.providers.vk import VKProvider
+    _vk_mod._vk_disabled = False
+
+    items = [
+        {"id": 1, "title": "Book A", "ext": "epub", "size": 1000, "url": "https://vk.com/a.epub"},
+        {"id": 2, "title": "Book B", "ext": "pdf",  "size": 2000, "url": "https://vk.com/b.pdf"},
+        {"id": 3, "title": "Book C", "ext": "doc",  "size": 3000, "url": "https://vk.com/c.doc"},
+    ]
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, params=None, **kw): return _vk_response(items)
+
+    with (
+        patch("app.providers.vk.settings") as mock_cfg,
+        patch("app.providers.vk.httpx.AsyncClient", FakeClient),
+    ):
+        mock_cfg.VK_TOKEN = "testtoken"
+        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
+        p = VKProvider()
+        results = await p.search("book", [])
+
+    assert len(results) == 2
+    exts = {r.ext for r in results}
+    assert exts == {"epub", "pdf"}
+
+
+async def test_vk_search_ext_filter():
+    """VK search respects ext_filter."""
+    from app.providers.vk import VKProvider
+    _vk_mod._vk_disabled = False
+
+    items = [
+        {"id": 1, "title": "Book A", "ext": "epub", "size": 1000, "url": "https://vk.com/a.epub"},
+        {"id": 2, "title": "Book B", "ext": "pdf",  "size": 2000, "url": "https://vk.com/b.pdf"},
+    ]
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, params=None, **kw): return _vk_response(items)
+
+    with (
+        patch("app.providers.vk.settings") as mock_cfg,
+        patch("app.providers.vk.httpx.AsyncClient", FakeClient),
+    ):
+        mock_cfg.VK_TOKEN = "testtoken"
+        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
+        p = VKProvider()
+        results = await p.search("book", ["epub"])
+
+    assert all(r.ext == "epub" for r in results)
+
+
+async def test_vk_auth_error_disables_provider():
+    """VK error code 5 permanently disables the provider."""
+    from app.providers.vk import VKProvider
+    _vk_mod._vk_disabled = False
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, params=None, **kw):
+            return _vk_error_response(5, "User authorization failed")
+
+    with (
+        patch("app.providers.vk.settings") as mock_cfg,
+        patch("app.providers.vk.httpx.AsyncClient", FakeClient),
+    ):
+        mock_cfg.VK_TOKEN = "badtoken"
+        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
+        p = VKProvider()
+        results = await p.search("book", [])
+
+    assert results == []
+    assert _vk_mod._vk_disabled is True
+    # cleanup for other tests
+    _vk_mod._vk_disabled = False
+
+
+async def test_vk_result_shape():
+    """VK results carry correct id format and source."""
+    from app.providers.vk import VKProvider
+    _vk_mod._vk_disabled = False
+
+    items = [{"id": 42, "title": "My Book", "ext": "epub", "size": 500, "url": "https://vk.com/x.epub"}]
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, params=None, **kw): return _vk_response(items)
+
+    with (
+        patch("app.providers.vk.settings") as mock_cfg,
+        patch("app.providers.vk.httpx.AsyncClient", FakeClient),
+    ):
+        mock_cfg.VK_TOKEN = "tok"
+        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
+        p = VKProvider()
+        results = await p.search("book", [])
+
+    assert len(results) == 1
+    r = results[0]
+    assert r.id == "vk:42"
+    assert r.source == "vk"
+    assert r.ext == "epub"
+    assert r.size_bytes == 500
+
+
+# ===========================================================================
+# Anna's Archive provider tests
+# ===========================================================================
+
+def _aa_html_page(md5s: list[str]) -> str:
+    """Build a minimal AA search HTML with result cards."""
+    cards = ""
+    for md5 in md5s:
+        cards += f"""
+        <a href="/md5/{md5}">
+          <h3>Book {md5[:4]}</h3>
+          <p class="author">Author Name</p>
+        </a>
+        """
+    return f"<html><body>{cards}</body></html>"
+
+
+async def test_annas_html_search_returns_results():
+    from app.providers.annas import AnnasProvider
+
+    html = _aa_html_page(["aabbcc1234567890aabbcc1234567890", "ff00ff1234567890ff00ff1234567890"])
+
+    class FakeResp:
+        status_code = 200
+        text = html
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw): return FakeResp()
+
+    with (
+        patch("app.providers.annas.settings") as mock_cfg,
+        patch("app.providers.annas.httpx.AsyncClient", FakeClient),
+    ):
+        mock_cfg.AA_API_KEY = ""
+        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
+        p = AnnasProvider()
+        results = await p.search("test", ["epub"])
+
+    assert len(results) >= 1
+    assert all(r.source == "annas" for r in results)
+    assert all(r.id.startswith("annas:") for r in results)
+
+
+async def test_annas_cloudflare_raises():
+    from app.providers.annas import AnnasProvider
+
+    class FakeResp:
+        status_code = 503
+        text = "Just a moment"
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw): return FakeResp()
+
+    with (
+        patch("app.providers.annas.settings") as mock_cfg,
+        patch("app.providers.annas.httpx.AsyncClient", FakeClient),
+    ):
+        mock_cfg.AA_API_KEY = ""
+        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
+        p = AnnasProvider()
+        with pytest.raises(RuntimeError, match="Cloudflare"):
+            await p.search("test", ["epub"])
+
+
+async def test_annas_resolve_uses_stored_url():
+    """When extra has a direct download_url, resolve returns it without HTTP."""
+    from app.providers.annas import AnnasProvider
+    from app.providers.base import SearchResult
+
+    result = SearchResult(
+        id="annas:abc123",
+        title="Book",
+        ext="epub",
+        source="annas",
+        extra={"aa_id": "abc123", "download_url": "https://cdn.annas.org/abc.epub"},
+    )
+
+    p = AnnasProvider()
+    plan = await p.resolve(result)
+    assert plan.url == "https://cdn.annas.org/abc.epub"
