@@ -1,4 +1,4 @@
-"""Job routes: POST /api/download, GET /api/jobs/{id}. See BUILD.md §7.1."""
+"""Job routes: POST /api/download, GET /api/jobs/{id}, GET /api/history. See BUILD.md §7.1."""
 import asyncio
 import uuid
 import re
@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import require_user
+from app.db import get_db
 from app.models import Job
 from app.providers import PROVIDERS
 from app.providers.base import SearchResult
@@ -37,7 +38,15 @@ async def start_download(
         raise HTTPException(status_code=400, detail="Only EPUB and PDF supported")
 
     job_id = str(uuid.uuid4())
-    job = Job(id=job_id, status="queued", ext=ext, title=result.title)
+    job = Job(
+        id=job_id,
+        status="queued",
+        ext=ext,
+        title=result.title,
+        user_id=user["id"],
+        source=result.source,
+        author=result.author,
+    )
     await job_svc.create_job(job)
 
     # Find the provider that owns this result.
@@ -69,3 +78,15 @@ async def get_job(job_id: str, user: dict = Depends(require_user)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job.model_dump()
+
+
+@router.get("/history")
+async def history(user: dict = Depends(require_user)):
+    async with get_db() as db:
+        cur = await db.execute(
+            "SELECT id, title, author, source, ext, sha256, verdict, created_at"
+            " FROM history WHERE user_id = ? ORDER BY created_at DESC LIMIT 50",
+            (user["id"],),
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]

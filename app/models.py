@@ -19,6 +19,9 @@ class Job(BaseModel):
     download_url: str | None = None
     reason: str | None = None
     detail: str | None = None
+    user_id: int | None = None
+    source: str | None = None
+    author: str | None = None
 
 
 class User(BaseModel):

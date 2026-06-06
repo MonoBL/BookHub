@@ -19,6 +19,7 @@ import httpx
 
 from app.config import settings
 from app.db import get_db, write_db
+from app.events import log_event
 from app.services import jobs as job_svc
 
 logger = logging.getLogger("bookhub")
@@ -440,6 +441,13 @@ async def _apply_verdict(
     ready_dir = Path(settings.DATA_DIR) / "ready"
     ready_dir.mkdir(parents=True, exist_ok=True)
 
+    job = await job_svc.get_job(job_id)
+    title = job.title if job else None
+    source = job.source if job else None
+    user_id = job.user_id if job else None
+    author = job.author if job else None
+    now = datetime.now(timezone.utc).isoformat()
+
     if verdict == "clean":
         dest = ready_dir / f"{job_id}.{ext}"
         path.rename(dest)
@@ -448,6 +456,23 @@ async def _apply_verdict(
             status="clean",
             download_url=f"/api/files/{job_id}",
         )
+        log_event(
+            "verdict",
+            user_id=user_id,
+            title=title,
+            source=source,
+            sha256=sha256,
+            verdict="clean",
+            has_active_content=has_active_content,
+        )
+        # Write history row.
+        if user_id:
+            async with write_db() as db:
+                await db.execute(
+                    "INSERT INTO history (user_id, title, author, source, ext, sha256, verdict, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, title, author, source, ext, sha256, "clean", now),
+                )
         return {
             "verdict": "clean",
             "sha256": sha256,
@@ -458,10 +483,28 @@ async def _apply_verdict(
         path.unlink(missing_ok=True)
         detail = json.dumps(stats)
         await job_svc.update_job(job_id, status="blocked", reason=verdict, detail=detail)
+        log_event(
+            "block",
+            user_id=user_id,
+            title=title,
+            source=source,
+            sha256=sha256,
+            verdict=verdict,
+            counts=stats,
+        )
         return {"verdict": "blocked", "sha256": sha256, "reason": verdict}
 
     # unverified
     path.unlink(missing_ok=True)
     reason = "quota" if not stats else "scan_timeout"
     await job_svc.update_job(job_id, status="unverified", reason=reason)
+    log_event(
+        "verdict",
+        user_id=user_id,
+        title=title,
+        source=source,
+        sha256=sha256,
+        verdict="unverified",
+        reason=reason,
+    )
     return {"verdict": "unverified", "sha256": sha256, "reason": reason}

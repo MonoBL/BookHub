@@ -12,6 +12,7 @@ from app.auth import require_user
 from app.config import settings
 from app.db import get_db, init_db, write_db
 from app.routers import api_admin, api_auth, api_convert, api_files, api_jobs, api_search, pages
+from app.events import start_events_writer, stop_events_writer
 from app.services.cleaner import run_cleaner
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -55,9 +56,11 @@ async def _bootstrap_admin() -> None:
 async def lifespan(app: FastAPI):
     await init_db()
     await _bootstrap_admin()
+    start_events_writer()
     cleaner_task = asyncio.create_task(run_cleaner())
     yield
     cleaner_task.cancel()
+    stop_events_writer()
     try:
         await cleaner_task
     except asyncio.CancelledError:

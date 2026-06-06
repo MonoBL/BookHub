@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app import auth
+from app.config import settings
 from app.db import get_db, write_db
 
 router = APIRouter()
@@ -90,4 +91,61 @@ async def reset_password(
         # Invalidate existing sessions to force re-login with the new password.
         await db.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
 
+    return {"ok": True}
+
+
+@router.get("/events")
+async def list_events(
+    limit: int = 100,
+    kind: str | None = None,
+    _user: dict = Depends(auth.require_admin),
+):
+    """Return recent audit events for the admin panel."""
+    async with get_db() as db:
+        if kind:
+            cur = await db.execute(
+                "SELECT * FROM events WHERE kind = ? ORDER BY ts DESC LIMIT ?",
+                (kind, limit),
+            )
+        else:
+            cur = await db.execute(
+                "SELECT * FROM events ORDER BY ts DESC LIMIT ?",
+                (limit,),
+            )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+@router.get("/providers")
+async def provider_health(_user: dict = Depends(auth.require_admin)):
+    """Return health status of all registered providers."""
+    from app.providers import PROVIDERS
+    import app.providers.vk as _vk_mod
+
+    result = []
+    for p in PROVIDERS:
+        note = None
+        if p.name == "vk" and _vk_mod._vk_disabled:
+            note = "Token expired or access denied — re-paste VK_TOKEN"
+        result.append({
+            "name": p.name,
+            "enabled": p.enabled,
+            "note": note,
+        })
+    return result
+
+
+class VKTokenBody(BaseModel):
+    token: str
+
+
+@router.post("/vk-token")
+async def set_vk_token(body: VKTokenBody, _user: dict = Depends(auth.require_admin)):
+    """Override VK_TOKEN at runtime without restarting the container."""
+    import app.providers.vk as _vk_mod
+    if not body.token:
+        raise HTTPException(status_code=400, detail="Token cannot be empty")
+    # Update the settings object in-place (process-lifetime override).
+    settings.VK_TOKEN = body.token
+    _vk_mod._vk_disabled = False
     return {"ok": True}
