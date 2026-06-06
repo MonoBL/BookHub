@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookHub — Admin</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#16213e">
+</head>
+<body>
+  <div class="offline-banner" id="offline-banner">Offline</div>
+  <header>
+    <h1>BookHub Admin</h1>
+    <nav>
+      <a href="/">Search</a>
+      <a href="/convert">Convert</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+  <main>
+    <div class="card">
+      <h2 style="margin-bottom:1rem">Users</h2>
+      <table>
+        <thead><tr><th>Username</th><th>Admin</th><th>Created</th><th></th></tr></thead>
+        <tbody id="users-body"></tbody>
+      </table>
+      <details style="margin-top:1rem">
+        <summary style="cursor:pointer;color:var(--muted)">Create user</summary>
+        <form id="create-user-form" style="margin-top:1rem;display:flex;gap:0.5rem;flex-wrap:wrap">
+          <input type="text" id="new-username" placeholder="Username" style="width:150px">
+          <input type="password" id="new-password" placeholder="Password" style="width:150px">
+          <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.9rem">
+            <input type="checkbox" id="new-is-admin"> Admin
+          </label>
+          <button type="submit">Create</button>
+          <div class="error-msg" id="create-error" hidden></div>
+        </form>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:1rem">Provider Health</h2>
+      <div id="provider-health">Loading...</div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:0.5rem">VK Token</h2>
+      <p style="color:var(--muted);font-size:0.9rem;margin-bottom:1rem">
+        Overrides the VK_TOKEN env var. Required scope: docs,offline.
+      </p>
+      <form id="vk-token-form" style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <input type="password" id="vk-token-input" placeholder="vk1.a...." style="flex:1;min-width:200px">
+        <button type="submit">Save</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:0.5rem">VirusTotal Quota</h2>
+      <div id="vt-quota">Loading...</div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:1rem">Events</h2>
+      <div class="card" style="padding:0;overflow:auto">
+        <table>
+          <thead><tr><th>Time</th><th>Kind</th><th>Title</th><th>Detail</th></tr></thead>
+          <tbody id="events-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>

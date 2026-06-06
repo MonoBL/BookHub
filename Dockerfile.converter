@@ -1,0 +1,31 @@
+# TODO: pin by digest for production, e.g.:
+# FROM python:3.12-slim@sha256:<digest>
+FROM python:3.12-slim
+
+# ghostscript is pulled in by ocrmypdf; apt version is typically recent enough
+# and runs with -dSAFER by default in modern builds.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    calibre \
+    poppler-utils \
+    ocrmypdf \
+    tesseract-ocr-eng \
+    tesseract-ocr-por \
+    tesseract-ocr-fra \
+    tesseract-ocr-spa \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN adduser --system --uid 10002 --no-create-home converter
+
+COPY converter/ /app/
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/tmp \
+    TMPDIR=/tmp \
+    CALIBRE_TEMP_DIR=/tmp \
+    CALIBRE_CONFIG_DIRECTORY=/tmp/calibre \
+    MPLCONFIGDIR=/tmp/mpl
+
+USER 10002
+
+ENTRYPOINT ["python", "/app/run_convert.py"]

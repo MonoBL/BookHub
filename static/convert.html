@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookHub — Convert</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#16213e">
+</head>
+<body>
+  <div class="offline-banner" id="offline-banner">Offline — conversion needs a connection</div>
+  <header>
+    <h1>BookHub</h1>
+    <nav>
+      <a href="/">Search</a>
+      <a href="/admin" id="admin-link" hidden>Admin</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+  <main>
+    <div class="card">
+      <h2 style="margin-bottom:0.5rem">PDF to EPUB</h2>
+      <p style="color:var(--warn);font-size:0.9rem;margin-bottom:1.5rem">
+        <strong>Note:</strong> Text-first PDFs (novels, single-column) convert well.
+        Tables, multi-column layouts, and complex academic PDFs are best-effort and will degrade.
+        Scanned PDFs are OCR'd first; quality depends on scan quality.
+        This is inherent to PDF to EPUB conversion, not a bug.
+      </p>
+      <form id="convert-form">
+        <div class="form-group">
+          <label for="title">Book Title</label>
+          <input type="text" id="title" name="title" required>
+        </div>
+        <div class="form-group">
+          <label for="author">Author</label>
+          <input type="text" id="author" name="author">
+        </div>
+        <div class="form-group">
+          <label for="pdf-file">PDF File (max 200 MB)</label>
+          <input type="file" id="pdf-file" name="file" accept=".pdf,application/pdf" required
+            style="background:none;border:none;padding:0;color:var(--text)">
+        </div>
+        <div class="error-msg" id="error-msg" hidden></div>
+        <button type="submit" id="convert-btn">Convert to EPUB</button>
+      </form>
+    </div>
+    <div id="progress-section" hidden>
+      <div class="card">
+        <p id="progress-status">Uploading...</p>
+        <div id="download-area" hidden>
+          <a id="download-link" href="#"><button>Download EPUB</button></a>
+        </div>
+      </div>
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+  <script src="/static/convert.js"></script>
+</body>
+</html>

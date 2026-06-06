@@ -1,0 +1,72 @@
+networks:
+  bookhub_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-bookhub
+  proxy_net:         # app + cloudflared only
+  socketproxy_net:   # app + docker-socket-proxy only
+
+services:
+  bookhub:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bookhub:latest
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=default
+    pids_limit: 256
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: "2.0"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=512m
+    volumes:
+      - ./data:/data:rw
+    # loopback only; cloudflared sidecar (proxy_net) or reverse proxy fronts it.
+    # For Option A (cloudflared sidecar): remove this ports entry entirely.
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    networks:
+      - bookhub_net
+      - proxy_net
+      - socketproxy_net
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  # Scoped docker socket proxy for launching converter workers.
+  # The app container NEVER touches /var/run/docker.sock directly.
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy
+    environment:
+      CONTAINERS: 1
+      POST: 1       # allow create/start; everything else default-deny
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - socketproxy_net
+    restart: unless-stopped
+
+  # Option A access (recommended): cloudflared sidecar.
+  # Outbound 443 only; reaches app at http://bookhub:8000 over proxy_net.
+  # The app exposes no VLAN port. Omit this service for Option B.
+  # Requires CLOUDFLARED_TOKEN in .env and a tunnel configured in CF dashboard.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
+    networks:
+      - proxy_net
+    restart: unless-stopped
+    profiles:
+      - cloudflared   # opt-in: docker compose --profile cloudflared up

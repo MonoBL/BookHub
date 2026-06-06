@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookHub</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#16213e">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+</head>
+<body>
+  <div class="offline-banner" id="offline-banner">Offline — search and downloads need a connection</div>
+  <header>
+    <h1>BookHub</h1>
+    <nav>
+      <a href="/convert">Convert</a>
+      <a href="/admin" id="admin-link" hidden>Admin</a>
+      <a href="#" id="logout-link">Sign out</a>
+    </nav>
+  </header>
+  <main>
+    <div class="card">
+      <form id="search-form" style="display:flex;gap:0.75rem;flex-wrap:wrap">
+        <input type="search" id="search-input" placeholder="Search by title or author" style="flex:1;min-width:200px" required>
+        <div style="display:flex;gap:0.5rem;align-items:center">
+          <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.9rem">
+            <input type="radio" name="ext" value="epub" checked> EPUB
+          </label>
+          <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.9rem">
+            <input type="radio" name="ext" value="pdf"> PDF
+          </label>
+          <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.9rem">
+            <input type="radio" name="ext" value=""> Both
+          </label>
+        </div>
+        <button type="submit">Search</button>
+      </form>
+    </div>
+
+    <div id="provider-banners"></div>
+
+    <div id="results-section" hidden>
+      <h3 style="margin-bottom:0.75rem" id="results-title">Results</h3>
+      <div class="card" style="padding:0;overflow:auto">
+        <table id="results-table">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Author</th>
+              <th>Size</th>
+              <th>Format</th>
+              <th>Source</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="recent-section" hidden>
+      <h3 style="margin-bottom:0.75rem;margin-top:1.5rem">Recent</h3>
+      <div class="card" style="padding:0;overflow:auto">
+        <table>
+          <thead><tr><th>Title</th><th>Format</th><th>Source</th><th>Verdict</th></tr></thead>
+          <tbody id="recent-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+  <script src="/static/search.js"></script>
+</body>
+</html>
