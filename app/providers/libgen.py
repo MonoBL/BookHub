@@ -108,7 +108,8 @@ class LibgenProvider:
         if not base:
             raise RuntimeError("No Libgen mirror available")
 
-        url = f"{base}/index.php?{urlencode({'req': query, 'res': 100})}"
+        # covers=on makes libgen include the cover thumbnail <img> in each row.
+        url = f"{base}/index.php?{urlencode({'req': query, 'res': 100, 'covers': 'on'})}"
         timeout = settings.PROVIDER_SEARCH_TIMEOUT_S
 
         async with httpx.AsyncClient(
