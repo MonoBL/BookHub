@@ -235,7 +235,7 @@ class LibgenProvider:
             if not (0 <= idx < len(cells)):
                 continue
             for link in cells[idx].css("a"):
-                href = link.attributes.get("href", "")
+                href = link.attributes.get("href") or ""
                 m = re.search(r"(?i)md5=([a-f0-9]{32})", href)
                 if m:
                     return m.group(1).lower()
@@ -312,7 +312,8 @@ class LibgenProvider:
         """Find the get.php?md5=...&key=... link in ads.php HTML."""
         tree = HTMLParser(html)
         for link in tree.css("a"):
-            href = link.attributes.get("href", "")
+            # selectolax returns None for a valueless attribute (e.g. <a href>).
+            href = link.attributes.get("href") or ""
             if "get.php" in href and "key=" in href:
                 if not href.startswith("http"):
                     href = urljoin(ads_url, href)

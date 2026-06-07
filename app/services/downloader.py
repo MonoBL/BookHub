@@ -59,33 +59,46 @@ async def download(job_id: str, plan: DownloadPlan, ext: str) -> Path:
     return dest
 
 
+# Libgen mirrors all redirect get.php to the same CDN (e.g. cdn3.booksdl.lc),
+# which intermittently 503s a datacenter IP: empirically ~1 attempt in 8 wins.
+# So a single pass over the "distinct" candidates almost always fails. Retry
+# each candidate a few times with backoff before giving up.
+_DOWNLOAD_ATTEMPTS_PER_PLAN = 5
+_DOWNLOAD_RETRY_BACKOFF_S = 3.0
+
+
 async def download_with_fallback(
     job_id: str, plans: list[DownloadPlan], ext: str
 ) -> Path:
-    """Try each candidate download URL until one succeeds.
+    """Try each candidate download URL, retrying transient failures.
 
-    Libgen hands out get.php links on CDN hosts (e.g. cdn3.booksdl.lc) that
-    sometimes 503 a server's datacenter IP while serving residential IPs fine.
-    Different mirrors point at different CDN hosts, so we fall back across the
-    distinct candidates the provider resolved. A size-cap 'blocked' is final
-    and stops the loop (retrying other hosts would hit the same oversized file).
+    Libgen hands out get.php links that redirect to a CDN host (e.g.
+    cdn3.booksdl.lc) which sometimes 503s a server's datacenter IP while serving
+    residential IPs fine. The mirrors look distinct but funnel to the same CDN,
+    so falling back across candidates is not enough: we also retry each
+    candidate with backoff to ride out the intermittent 503s. A size-cap
+    'blocked' is final and stops the loop (retrying would hit the same oversized
+    file).
     """
     if not plans:
         raise RuntimeError("no download candidates")
 
     last_exc: Exception | None = None
     for i, plan in enumerate(plans, start=1):
-        try:
-            return await download(job_id, plan, ext)
-        except RuntimeError as exc:
-            last_exc = exc
-            current = await job_svc.get_job(job_id)
-            if current and current.status == "blocked":
-                raise
-            logger.warning(
-                "download candidate %d/%d failed job=%s: %s",
-                i, len(plans), job_id, exc,
-            )
+        for attempt in range(1, _DOWNLOAD_ATTEMPTS_PER_PLAN + 1):
+            try:
+                return await download(job_id, plan, ext)
+            except RuntimeError as exc:
+                last_exc = exc
+                current = await job_svc.get_job(job_id)
+                if current and current.status == "blocked":
+                    raise
+                logger.warning(
+                    "download candidate %d/%d attempt %d/%d failed job=%s: %s",
+                    i, len(plans), attempt, _DOWNLOAD_ATTEMPTS_PER_PLAN, job_id, exc,
+                )
+                if attempt < _DOWNLOAD_ATTEMPTS_PER_PLAN:
+                    await asyncio.sleep(_DOWNLOAD_RETRY_BACKOFF_S * attempt)
 
     raise last_exc or RuntimeError("all download candidates failed")
 
