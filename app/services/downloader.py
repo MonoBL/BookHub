@@ -60,11 +60,13 @@ async def download(job_id: str, plan: DownloadPlan, ext: str) -> Path:
 
 
 # Libgen mirrors all redirect get.php to the same CDN (e.g. cdn3.booksdl.lc),
-# which intermittently 503s a datacenter IP: empirically ~1 attempt in 8 wins.
-# So a single pass over the "distinct" candidates almost always fails. Retry
-# each candidate a few times with backoff before giving up.
-_DOWNLOAD_ATTEMPTS_PER_PLAN = 5
-_DOWNLOAD_RETRY_BACKOFF_S = 3.0
+# which intermittently 503s a datacenter IP: empirically only ~1 attempt in
+# several wins, and the bad window can last a while. A single pass over the
+# candidates almost always fails. Instead we round-robin the candidates and
+# keep retrying, with a short delay between rounds, until a total wall-clock
+# budget is spent. p(success) compounds quickly across ~20+ tries.
+_DOWNLOAD_RETRY_BUDGET_S = 120.0  # total time to keep retrying transient failures
+_DOWNLOAD_RETRY_DELAY_S = 3.0     # pause between full round-robin rounds
 
 
 async def download_with_fallback(
@@ -73,19 +75,24 @@ async def download_with_fallback(
     """Try each candidate download URL, retrying transient failures.
 
     Libgen hands out get.php links that redirect to a CDN host (e.g.
-    cdn3.booksdl.lc) which sometimes 503s a server's datacenter IP while serving
-    residential IPs fine. The mirrors look distinct but funnel to the same CDN,
-    so falling back across candidates is not enough: we also retry each
-    candidate with backoff to ride out the intermittent 503s. A size-cap
-    'blocked' is final and stops the loop (retrying would hit the same oversized
-    file).
+    cdn3.booksdl.lc) which frequently 503s a server's datacenter IP while
+    serving residential IPs fine. The mirrors look distinct but funnel to the
+    same CDN, so falling back across candidates once is not enough: we
+    round-robin every candidate and keep retrying within a time budget to ride
+    out the 503 window. A size-cap 'blocked' is final and stops the loop
+    (retrying would hit the same oversized file).
     """
     if not plans:
         raise RuntimeError("no download candidates")
 
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + _DOWNLOAD_RETRY_BUDGET_S
     last_exc: Exception | None = None
-    for i, plan in enumerate(plans, start=1):
-        for attempt in range(1, _DOWNLOAD_ATTEMPTS_PER_PLAN + 1):
+    attempt = 0
+
+    while True:
+        for i, plan in enumerate(plans, start=1):
+            attempt += 1
             try:
                 return await download(job_id, plan, ext)
             except RuntimeError as exc:
@@ -94,11 +101,15 @@ async def download_with_fallback(
                 if current and current.status == "blocked":
                     raise
                 logger.warning(
-                    "download candidate %d/%d attempt %d/%d failed job=%s: %s",
-                    i, len(plans), attempt, _DOWNLOAD_ATTEMPTS_PER_PLAN, job_id, exc,
+                    "download attempt %d (candidate %d/%d) failed job=%s: %s",
+                    attempt, i, len(plans), job_id, exc,
                 )
-                if attempt < _DOWNLOAD_ATTEMPTS_PER_PLAN:
-                    await asyncio.sleep(_DOWNLOAD_RETRY_BACKOFF_S * attempt)
+
+        if loop.time() >= deadline:
+            break
+        # Keep the job marked as downloading while we wait out the bad window.
+        await job_svc.update_job(job_id, status="downloading")
+        await asyncio.sleep(_DOWNLOAD_RETRY_DELAY_S)
 
     raise last_exc or RuntimeError("all download candidates failed")
 

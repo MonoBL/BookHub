@@ -292,16 +292,39 @@ async def test_download_with_fallback_tries_next_on_failure():
 
     plans = [DownloadPlan(url="https://cdnA/bad"), DownloadPlan(url="https://cdnB/good")]
     with patch.object(downloader, "download", fake_download), \
-         patch.object(downloader.job_svc, "get_job", fake_get_job), \
-         patch.object(downloader, "_DOWNLOAD_RETRY_BACKOFF_S", 0):
+         patch.object(downloader.job_svc, "get_job", fake_get_job):
         path = await downloader.download_with_fallback("job1", plans, "epub")
 
     assert str(path).endswith("job1.epub")
-    # The bad candidate is retried up to the per-plan attempt cap before we
-    # fall back to the good one (mirrors funnel to one flaky CDN).
-    expected = ["https://cdnA/bad"] * downloader._DOWNLOAD_ATTEMPTS_PER_PLAN
-    expected.append("https://cdnB/good")
-    assert calls == expected
+    # Round-robin within a round: the bad candidate fails, the good one
+    # succeeds, all in the first pass (no inter-round delay incurred).
+    assert calls == ["https://cdnA/bad", "https://cdnB/good"]
+
+
+async def test_download_with_fallback_retries_until_success():
+    """A single flaky candidate that 503s twice then succeeds is retried."""
+    from app.services import downloader
+
+    calls = []
+
+    async def fake_download(job_id, plan, ext):
+        calls.append(plan.url)
+        if len(calls) < 3:  # fail the first two attempts
+            raise RuntimeError("Server error '503'")
+        return Path(f"/tmp/{job_id}.{ext}")
+
+    async def fake_get_job(job_id):
+        return MagicMock(status="downloading")
+
+    plans = [DownloadPlan(url="https://cdn3/get")]
+    with patch.object(downloader, "download", fake_download), \
+         patch.object(downloader.job_svc, "get_job", fake_get_job), \
+         patch.object(downloader.job_svc, "update_job", AsyncMock()), \
+         patch.object(downloader, "_DOWNLOAD_RETRY_DELAY_S", 0):
+        path = await downloader.download_with_fallback("job1", plans, "epub")
+
+    assert str(path).endswith("job1.epub")
+    assert len(calls) == 3  # retried across rounds until it won
 
 
 async def test_download_with_fallback_blocked_is_final():
