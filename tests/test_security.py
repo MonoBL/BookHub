@@ -29,7 +29,8 @@ def admin_token(client):
 def user_b_token(client, admin_token):
     r = client.post(
         "/api/admin/users",
-        json={"username": "sec_user_b", "password": "userbpassword1", "is_admin": False},
+        json={"username": "sec_user_b", "password": "userbpassword1", "is_admin": False,
+              "must_change_password": False},
         cookies={"session": admin_token},
     )
     assert r.status_code == 200

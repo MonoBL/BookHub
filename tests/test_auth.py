@@ -148,6 +148,34 @@ def test_non_admin_blocked_from_admin_routes(client, admin_token):
 
 # --- Admin user CRUD ---
 
+def test_create_user_defaults_to_must_change_password(client, admin_token):
+    resp = client.post(
+        "/api/admin/users",
+        cookies=_cookies(admin_token),
+        json={"username": "mc_default_user", "password": "defaultpass123"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["must_change_password"] is True
+
+    # On login the flag is reported, and protected routes are gated until changed.
+    login = client.post("/api/auth/login", json={"username": "mc_default_user", "password": "defaultpass123"})
+    assert login.status_code == 200
+    assert login.json()["must_change_password"] is True
+    tok = login.cookies["session"]
+    gated = client.get("/api/history", cookies=_cookies(tok))
+    assert gated.status_code == 403  # must change password first
+
+
+def test_create_user_can_opt_out_of_must_change(client, admin_token):
+    resp = client.post(
+        "/api/admin/users",
+        cookies=_cookies(admin_token),
+        json={"username": "no_mc_user", "password": "defaultpass123", "must_change_password": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["must_change_password"] is False
+
+
 def test_create_user_duplicate_rejected(client, admin_token):
     resp = client.post(
         "/api/admin/users",

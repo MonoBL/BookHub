@@ -33,6 +33,9 @@
           <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.9rem">
             <input type="checkbox" id="new-is-admin"> Admin
           </label>
+          <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.9rem" title="User must set a new password on first login">
+            <input type="checkbox" id="new-must-change" checked> Change on first login
+          </label>
           <button type="submit">Create</button>
           <div class="error-msg" id="create-error" hidden></div>
         </form>

@@ -15,6 +15,8 @@ class CreateUserBody(BaseModel):
     username: str
     password: str
     is_admin: bool = False
+    # New users must change the admin-set password on first login by default.
+    must_change_password: bool = True
 
 
 class ResetPasswordBody(BaseModel):
@@ -45,8 +47,14 @@ async def create_user(body: CreateUserBody, _user: dict = Depends(auth.require_a
         async with write_db() as db:
             cur = await db.execute(
                 "INSERT INTO users (username, password_hash, is_admin, must_change_password, created_at)"
-                " VALUES (?, ?, ?, 0, ?)",
-                (body.username.strip(), password_hash, int(body.is_admin), now),
+                " VALUES (?, ?, ?, ?, ?)",
+                (
+                    body.username.strip(),
+                    password_hash,
+                    int(body.is_admin),
+                    int(body.must_change_password),
+                    now,
+                ),
             )
             user_id = cur.lastrowid
     except aiosqlite.IntegrityError:
@@ -56,7 +64,7 @@ async def create_user(body: CreateUserBody, _user: dict = Depends(auth.require_a
         "id": user_id,
         "username": body.username.strip(),
         "is_admin": body.is_admin,
-        "must_change_password": False,
+        "must_change_password": body.must_change_password,
     }
 
 
@@ -114,6 +122,18 @@ async def list_events(
             )
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+@router.get("/vt-quota")
+async def vt_quota(_user: dict = Depends(auth.require_admin)):
+    """Remaining VirusTotal daily quota (free tier)."""
+    from app.services.scanner import vt_daily_remaining
+    remaining = await vt_daily_remaining()
+    return {
+        "remaining": remaining,
+        "cap": settings.VT_DAILY_CAP,
+        "configured": bool(settings.VT_API_KEY),
+    }
 
 
 @router.get("/providers")
