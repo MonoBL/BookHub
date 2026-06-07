@@ -28,7 +28,7 @@ async function loadRecent() {
     recentBody.innerHTML = rows.map((h) => `
       <tr id="hist-${h.id}">
         <td>${esc(h.title || "—")}</td>
-        <td><span class="badge badge-${h.ext || "info"}">${esc(h.ext || "?")}</span></td>
+        <td><span class="badge badge-${esc(h.ext || "info")}">${esc(h.ext || "?")}</span></td>
         <td>${esc(h.source || "—")}</td>
         <td>${esc(h.verdict || "—")}</td>
         <td><button class="btn-del-hist" data-id="${h.id}" title="Remove">✕</button></td>
@@ -120,7 +120,7 @@ function vtSummary(job) {
 
 function renderResult(r, idx) {
   const sources = (r.extra && r.extra.sources) ? r.extra.sources : [r.source];
-  const srcBadges = sources.map((s) => `<span class="badge badge-${s}">${esc(s)}</span>`).join(" ");
+  const srcBadges = sources.map((s) => `<span class="badge badge-${esc(s)}">${esc(s)}</span>`).join(" ");
   const activeWarn = r.extra && r.extra.has_active_content
     ? `<span class="badge badge-warn" title="Contains JS/remote refs">active content</span>`
     : "";
@@ -129,7 +129,7 @@ function renderResult(r, idx) {
     <td>${esc(r.title)}</td>
     <td>${esc(r.author || "")}</td>
     <td>${esc(fmtSize(r.size_bytes))}</td>
-    <td><span class="badge badge-${r.ext}">${esc(r.ext.toUpperCase())}</span>${activeWarn}</td>
+    <td><span class="badge badge-${esc(r.ext)}">${esc(r.ext.toUpperCase())}</span>${activeWarn}</td>
     <td>${srcBadges}</td>
     <td><button class="btn-get" data-idx="${idx}">Get</button> <span class="job-status" id="status-${idx}"></span></td>
   </tr>`;

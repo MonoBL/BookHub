@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False
     ADMIN_PASSWORD: str = ""
     CLOUDFLARED_TOKEN: str = ""
+    # Expose Swagger/OpenAPI (/docs, /redoc, /openapi.json). Off in prod: the
+    # schema maps every route incl. admin. Enable only for local development.
+    ENABLE_DOCS: bool = False
+    # Session cookie lifetime (days). Shorter = smaller stolen-cookie window.
+    SESSION_TTL_DAYS: int = 7
 
     # limits
     DOWNLOAD_MAX_MB: int = 32

@@ -72,7 +72,45 @@ async def lifespan(app: FastAPI):
         pass
 
 
-app = FastAPI(title="BookHub", lifespan=lifespan)
+# Hide the OpenAPI schema + interactive docs in production (they map every
+# route, including admin). Toggle with ENABLE_DOCS for local development.
+_docs_kwargs = (
+    {}
+    if settings.ENABLE_DOCS
+    else {"docs_url": None, "redoc_url": None, "openapi_url": None}
+)
+app = FastAPI(title="BookHub", lifespan=lifespan, **_docs_kwargs)
+
+
+# Content Security Policy: self-only scripts (all inline JS was extracted to
+# files), inline styles allowed (many style="" attributes), no framing.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "font-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    # HSTS only matters over HTTPS (TLS terminates at Cloudflare).
+    if settings.COOKIE_SECURE:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 

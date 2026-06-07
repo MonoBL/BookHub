@@ -25,6 +25,33 @@ def admin_token(client):
     return r.cookies["session"]
 
 
+# --- Hardening: docs hidden, headers present, no user_id leak ---
+
+def test_openapi_and_docs_disabled(client):
+    assert client.get("/openapi.json").status_code == 404
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
+
+
+def test_security_headers_present(client):
+    r = client.get("/login")
+    assert "content-security-policy" in r.headers
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "referrer-policy" in r.headers
+
+
+def test_job_json_has_no_user_id(client, admin_token):
+    job_id = str(uuid.uuid4())
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(
+        job_svc.create_job(Job(id=job_id, status="queued", ext="epub", title="T", user_id=1))
+    )
+    r = client.get(f"/api/jobs/{job_id}", cookies={"session": admin_token})
+    assert r.status_code == 200
+    assert "user_id" not in r.json()
+
+
 @pytest.fixture(scope="module")
 def user_b_token(client, admin_token):
     r = client.post(

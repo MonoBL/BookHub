@@ -7,6 +7,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import HTTPException, Request
 
+from app.config import settings
 from app.db import get_db, write_db
 
 _ph = PasswordHasher()
@@ -15,7 +16,7 @@ _ph = PasswordHasher()
 # unknown usernames (prevents timing-based user enumeration).
 _DUMMY_HASH = _ph.hash("x")
 
-SESSION_TTL_DAYS = 30
+SESSION_TTL_DAYS = settings.SESSION_TTL_DAYS
 _RATE_WINDOW_S = 60
 _RATE_MAX_FAILURES = 5
 

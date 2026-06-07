@@ -1,6 +1,7 @@
 """Job routes: POST /api/download, GET /api/jobs/{id}, GET /api/history,
 GET /api/downloads. See BUILD.md §7.1."""
 import asyncio
+import logging
 import uuid
 import re
 from datetime import datetime, timedelta, timezone
@@ -71,7 +72,12 @@ async def _run_pipeline(job_id: str, result: SearchResult, provider, ext: str) -
     except Exception as exc:
         current = await job_svc.get_job(job_id)
         if current and current.status not in ("blocked", "unverified", "clean"):
-            await job_svc.update_job(job_id, status="error", reason=str(exc))
+            # Log the real error server-side; show the client a generic reason
+            # so internal details (mirror hosts, paths) are never leaked.
+            logging.getLogger("bookhub").warning(
+                "download_pipeline_error job=%s detail=%s", job_id, exc
+            )
+            await job_svc.update_job(job_id, status="error", reason="Download failed")
 
 
 @router.get("/jobs/{job_id}")
@@ -86,7 +92,8 @@ async def get_job(job_id: str, user: dict = Depends(require_user)):
     if job.user_id is not None and job.user_id != user["id"] and not user.get("is_admin"):
         raise HTTPException(status_code=404, detail="Job not found")
 
-    return job.model_dump()
+    # Never expose the owner's internal user_id to the client.
+    return job.model_dump(exclude={"user_id"})
 
 
 @router.get("/downloads")
