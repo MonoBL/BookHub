@@ -81,6 +81,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   font-size: 0.75rem;
   font-weight: 600;
   text-transform: uppercase;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
 }
 
 .badge-epub   { background: #1565c0; }
@@ -142,6 +144,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   gap: 0.35rem;
 }
 .job-status .stage { color: var(--text); }
+/* In a results row the indeterminate bar drops to its own full-width line
+   under the "Downloading…" label instead of trailing off to the side. */
+.job-status .progress { flex-basis: 100%; width: 100%; margin-left: 0; }
 .stage { color: var(--text); }
 .elapsed { color: var(--muted); font-size: 0.85rem; }
 .form-check label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.9rem; cursor: pointer; }
@@ -246,14 +251,24 @@ th { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
    (verdict + VT badge + Re-scan button) and push content off-screen. Cells
    wrap their content within the assigned column width instead. */
 #results-table { table-layout: fixed; }
-#results-table td { vertical-align: top; overflow-wrap: anywhere; }
-#results-table .col-cover  { width: 52px; }
-#results-table .col-title  { width: 28%; }
-#results-table .col-author { width: 16%; }
-#results-table .col-size   { width: 64px; }
-#results-table .col-format { width: 92px; }
-#results-table .col-source { width: 82px; }
-#results-table .col-action { width: 210px; }
+#results-table thead th {
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid #444;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+#results-table tbody tr { transition: background 0.12s ease; }
+#results-table tbody tr:hover { background: rgba(255, 255, 255, 0.035); }
+#results-table td { vertical-align: middle; overflow-wrap: anywhere; }
+#results-table td:nth-child(2) { vertical-align: top; }  /* title wraps from the top */
+#results-table .col-cover  { width: 56px; }
+#results-table .col-title  { width: 30%; }
+#results-table .col-author { width: 17%; }
+#results-table .col-size   { width: 70px; }
+#results-table .col-format { width: 84px; }
+#results-table .col-source { width: 92px; }
+#results-table .col-action { width: 200px; }
 
 .cover-cell { width: 44px; padding-right: 0; }
 .cover {
