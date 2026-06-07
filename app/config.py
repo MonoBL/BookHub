@@ -4,6 +4,11 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     # core
     DATA_DIR: str = "/data"
+    # HOST_DATA_DIR: host-side path that the daemon sees for the /data volume.
+    # Required for docker-out-of-docker: -v bind-mounts are resolved by the
+    # daemon on the HOST, not inside the app container. Set to the host path
+    # that maps to DATA_DIR (e.g. /opt/bookhub/data). Leave empty for local dev.
+    HOST_DATA_DIR: str = ""
     COOKIE_SECURE: bool = False
     ADMIN_PASSWORD: str = ""
     CLOUDFLARED_TOKEN: str = ""
@@ -11,7 +16,13 @@ class Settings(BaseSettings):
     # limits
     DOWNLOAD_MAX_MB: int = 32
     CONVERT_MAX_MB: int = 200
-    FILE_TTL_MINUTES: int = 60
+    IMAGE_MAX_MB: int = 50           # per-batch cap for image->BMP uploads
+    BMP_MAX_FILES: int = 200         # max images per BMP batch
+    BMP_DEFAULT_WIDTH: int = 480     # XTeink X4 portrait width
+    BMP_DEFAULT_HEIGHT: int = 800    # XTeink X4 portrait height
+    # File retention: a prepared download is kept this long, then deleted even
+    # if never grabbed. Downloading also deletes immediately. See cleaner.py.
+    FILE_TTL_MINUTES: int = 30
     DOWNLOAD_CONCURRENCY: int = 3
     SCAN_CONCURRENCY: int = 3
     CONVERT_CONCURRENCY: int = 1
@@ -37,6 +48,9 @@ class Settings(BaseSettings):
     CONVERTER_IMAGE: str = "bookhub-converter:latest"
     CONVERT_TIMEOUT_S: int = 600
     OCR_TIMEOUT_S: int = 1200
+    # Comic / scanned mode: image-heavy PDFs OCR every page, so allow much longer.
+    COMIC_CONVERT_TIMEOUT_S: int = 2400
+    COMIC_OCR_TIMEOUT_S: int = 3600
     OCR_LANGS: str = "eng+por+fra+spa"
 
     model_config = {"env_file": ".env", "extra": "ignore"}

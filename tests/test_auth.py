@@ -30,6 +30,26 @@ def _cookies(token: str) -> dict:
     return {"session": token}
 
 
+# --- First-run setup ---
+
+def test_needs_setup_false_when_admin_exists(client):
+    # The bootstrap admin already exists in the test DB.
+    r = client.get("/api/auth/needs-setup")
+    assert r.status_code == 200
+    assert r.json()["needs_setup"] is False
+
+
+def test_setup_blocked_once_users_exist(client):
+    r = client.post("/api/auth/setup", json={"username": "newadmin", "password": "longenough12"})
+    assert r.status_code == 403
+
+
+def test_setup_page_redirects_when_admin_exists(client):
+    r = client.get("/setup", follow_redirects=False)
+    assert r.status_code == 302
+    assert r.headers["location"] == "/login"
+
+
 # --- Login ---
 
 def test_login_ok(client):

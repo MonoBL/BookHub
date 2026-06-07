@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BookHub — First-run setup</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#16213e">
+</head>
+<body>
+  <div class="offline-banner" id="offline-banner">Offline — setup requires a connection</div>
+  <main style="max-width:440px;padding-top:3.5rem">
+    <div class="card">
+      <h2 style="margin-bottom:0.5rem">Welcome to BookHub</h2>
+      <p style="color:var(--muted);font-size:0.9rem;margin-bottom:1.5rem">
+        No account exists yet. Create the admin account to get started.
+        This screen disappears once the admin is created.
+      </p>
+      <form id="setup-form">
+        <div class="form-group">
+          <label for="username">Admin username</label>
+          <input type="text" id="username" name="username" autocomplete="username"
+            placeholder="3-32 chars: letters, numbers, . _ -" required>
+        </div>
+        <div class="form-group">
+          <label for="password">Password (min 12 chars)</label>
+          <input type="password" id="password" name="password" autocomplete="new-password" required>
+        </div>
+        <div class="form-group">
+          <label for="confirm">Confirm password</label>
+          <input type="password" id="confirm" name="confirm" autocomplete="new-password" required>
+        </div>
+        <div class="error-msg" id="error-msg" hidden></div>
+        <button type="submit" id="submit-btn" style="width:100%">Create admin account</button>
+      </form>
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+  <script>
+    (function () {
+      const form = document.getElementById("setup-form");
+      const errorEl = document.getElementById("error-msg");
+      const btn = document.getElementById("submit-btn");
+
+      function fail(msg) {
+        errorEl.textContent = msg;
+        errorEl.hidden = false;
+        btn.disabled = false;
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        errorEl.hidden = true;
+        btn.disabled = true;
+
+        const username = document.getElementById("username").value.trim();
+        const password = document.getElementById("password").value;
+        const confirm = document.getElementById("confirm").value;
+
+        if (password.length < 12) return fail("Password must be at least 12 characters.");
+        if (password !== confirm) return fail("Passwords do not match.");
+
+        try {
+          const resp = await fetch("/api/auth/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username, password }),
+          });
+          if (resp.ok) {
+            window.location.href = "/";
+          } else {
+            const err = await resp.json().catch(() => ({}));
+            fail(err.detail || "Setup failed.");
+          }
+        } catch {
+          fail("Network error — check your connection.");
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

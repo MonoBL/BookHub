@@ -1,3 +1,6 @@
+import re
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -7,8 +10,15 @@ from app.db import get_db, write_db
 
 router = APIRouter()
 
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9._-]{3,32}$")
+
 
 class LoginBody(BaseModel):
+    username: str
+    password: str
+
+
+class SetupBody(BaseModel):
     username: str
     password: str
 
@@ -30,6 +40,44 @@ def _set_session_cookie(response: Response, token: str) -> None:
     if settings.COOKIE_SECURE:
         kwargs["secure"] = True
     response.set_cookie(**kwargs)
+
+
+@router.get("/needs-setup")
+async def needs_setup():
+    """True when no users exist yet (first-run admin creation screen)."""
+    return {"needs_setup": await auth.user_count() == 0}
+
+
+@router.post("/setup")
+async def setup(body: SetupBody, response: Response):
+    """Create the first admin on a fresh install. Disabled once any user exists."""
+    if not _USERNAME_RE.match(body.username):
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be 3-32 chars: letters, numbers, . _ -",
+        )
+    if len(body.password) < 12:
+        raise HTTPException(status_code=400, detail="Password must be at least 12 characters")
+
+    now = datetime.now(timezone.utc).isoformat()
+    pw_hash = auth.hash_password(body.password)
+
+    # write_db() serializes writes, so the count+insert is race-safe.
+    async with write_db() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        (count,) = await cur.fetchone()
+        if count > 0:
+            raise HTTPException(status_code=403, detail="Setup already completed")
+        cur = await db.execute(
+            "INSERT INTO users (username, password_hash, is_admin, must_change_password, created_at)"
+            " VALUES (?, ?, 1, 0, ?)",
+            (body.username, pw_hash, now),
+        )
+        user_id = cur.lastrowid
+
+    token = await auth.create_session(user_id)
+    _set_session_cookie(response, token)
+    return {"ok": True}
 
 
 @router.post("/login")

@@ -19,6 +19,8 @@
     </nav>
   </header>
   <main>
+    <div id="downloads-section" hidden></div>
+
     <div class="card">
       <h2 style="margin-bottom:0.5rem">PDF to EPUB</h2>
       <p style="color:var(--warn);font-size:0.9rem;margin-bottom:1.5rem">
@@ -41,6 +43,12 @@
           <input type="file" id="pdf-file" name="file" accept=".pdf,application/pdf" required
             style="background:none;border:none;padding:0;color:var(--text)">
         </div>
+        <div class="form-group form-check">
+          <label>
+            <input type="checkbox" id="comic" name="comic" value="true">
+            Comic / image PDF (keep images, skip OCR, longer timeout)
+          </label>
+        </div>
         <div class="error-msg" id="error-msg" hidden></div>
         <button type="submit" id="convert-btn">Convert to EPUB</button>
       </form>
@@ -50,6 +58,47 @@
         <p id="progress-status">Uploading...</p>
         <div id="download-area" hidden>
           <a id="download-link" href="#"><button>Download EPUB</button></a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:0.5rem">Images to BMP (e-reader)</h2>
+      <p style="color:var(--muted);font-size:0.9rem;margin-bottom:1.5rem">
+        Converts JPG / PNG / WEBP / BMP / TIFF to 8-bit grayscale BMP, scaled to
+        fill the screen and centre-cropped. Defaults target the XTeink X4 (480 × 800).
+        One image gives a .bmp; several give a .zip.
+      </p>
+      <form id="bmp-form">
+        <div class="form-group">
+          <label for="bmp-files">Images</label>
+          <input type="file" id="bmp-files" name="files" multiple
+            accept=".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,image/*" required
+            style="background:none;border:none;padding:0;color:var(--text)">
+        </div>
+        <div class="form-group" style="display:flex;gap:1rem;flex-wrap:wrap">
+          <div style="flex:1;min-width:120px">
+            <label for="bmp-width">Width</label>
+            <input type="text" inputmode="numeric" id="bmp-width" name="width" value="480">
+          </div>
+          <div style="flex:1;min-width:120px">
+            <label for="bmp-height">Height</label>
+            <input type="text" inputmode="numeric" id="bmp-height" name="height" value="800">
+          </div>
+        </div>
+        <div class="form-group form-check">
+          <label>
+            <input type="checkbox" id="bmp-grayscale" name="grayscale" value="true" checked>
+            8-bit grayscale (recommended for e-ink)
+          </label>
+        </div>
+        <div class="error-msg" id="bmp-error" hidden></div>
+        <button type="submit" id="bmp-btn">Convert to BMP</button>
+      </form>
+      <div id="bmp-progress-section" hidden style="margin-top:1rem">
+        <p id="bmp-progress-status"></p>
+        <div id="bmp-download-area" hidden>
+          <a id="bmp-download-link" href="#"><button>Download result</button></a>
         </div>
       </div>
     </div>

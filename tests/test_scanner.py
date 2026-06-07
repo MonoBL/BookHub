@@ -135,8 +135,11 @@ def test_vt_map_clean():
     assert v == "clean"
 
 
-def test_vt_map_stale_becomes_unverified():
+def test_vt_map_stale_becomes_unverified(monkeypatch):
     from datetime import datetime, timezone, timedelta
+    from app.config import settings
+    # Pin the freshness floor so the test is independent of the deployed .env.
+    monkeypatch.setattr(settings, "VT_CLEAN_MAX_AGE_DAYS", 180)
     stale = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
     v = _map_stats({"malicious": 0, "suspicious": 0, "undetected": 40}, stale, 40)
     assert v == "unverified"

@@ -31,6 +31,15 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     env_file: .env
+    environment:
+      # Converter talks to the scoped docker-socket-proxy, never raw docker.sock.
+      - DOCKER_HOST=tcp://dockerproxy:2375
+      # HOST_DATA_DIR must match the host path that maps to /data inside this
+      # container. The docker daemon resolves -v bind-mounts on the HOST, so
+      # paths inside the app container are invalid. Example:
+      #   HOST_DATA_DIR=/opt/bookhub/data
+      # Leave empty (or unset) for local dev (no docker-out-of-docker).
+      - HOST_DATA_DIR=${HOST_DATA_DIR:-}
     networks:
       - bookhub_net
       - proxy_net

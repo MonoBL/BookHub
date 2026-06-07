@@ -1,4 +1,12 @@
-"""VK Documents provider. Requires a user access token with docs scope."""
+"""VK Documents provider. DEPRECATED.
+
+VK removed the `docs.search` API method (returns error 3 "Unknown method
+passed"), so global document search on VK is no longer possible. A valid token
+still authenticates and `docs.get` works, but only lists the token owner's own
+uploads, which is useless for finding books. The provider is therefore hard
+-disabled: it never participates in search regardless of whether VK_TOKEN is
+set. Kept only so historical jobs/configs don't break imports. See BUILD.md §6.
+"""
 import logging
 
 import httpx
@@ -11,6 +19,9 @@ log = logging.getLogger("bookhub")
 _VK_API = "https://api.vk.com/method"
 _VK_VERSION = "5.199"
 
+# Hard kill-switch: docs.search no longer exists server-side (2024+).
+_VK_DEPRECATED = True
+
 # Process-lifetime flag: set True on auth error (code 5 or 15) so we stop retrying.
 _vk_disabled = False
 
@@ -22,13 +33,19 @@ def _token() -> str:
 
 class VKProvider:
     name = "vk"
+    deprecated = True
 
     @property
     def enabled(self) -> bool:
+        # Never enabled: VK killed docs.search. See module docstring.
+        if _VK_DEPRECATED:
+            return False
         return bool(_token()) and not _vk_disabled
 
     async def search(self, query: str, ext_filter: list[str]) -> list[SearchResult]:
         global _vk_disabled
+        if _VK_DEPRECATED:
+            return []
         token = _token()
         if not token:
             return []

@@ -209,6 +209,10 @@ async def _cache_lookup(sha256: str) -> dict | None:
 
 async def _cache_store(sha256: str, verdict: str, stats: dict, lad: str | None) -> None:
     now = datetime.now(timezone.utc).isoformat()
+    # Raw VT stats have no "total"; derive engines_total from the category sum.
+    engines_total = stats.get("total")
+    if engines_total is None:
+        engines_total = sum(v for v in stats.values() if isinstance(v, int))
     async with write_db() as db:
         await db.execute(
             """
@@ -228,7 +232,7 @@ async def _cache_store(sha256: str, verdict: str, stats: dict, lad: str | None) 
                 verdict,
                 stats.get("malicious", 0),
                 stats.get("suspicious", 0),
-                stats.get("total", 0),
+                engines_total,
                 lad,
                 now,
             ),
@@ -410,7 +414,10 @@ async def verify_and_scan(job_id: str, path: Path, ext: str) -> dict:
                 "suspicious": cached["suspicious_count"],
                 "total": cached["engines_total"],
             }
-            return await _apply_verdict(job_id, path, ext, verdict, sha256, stats, has_active)
+            return await _apply_verdict(
+                job_id, path, ext, verdict, sha256, stats, has_active,
+                lad=cached["last_analysis_date"],
+            )
 
         async with httpx.AsyncClient() as client:
             verdict, stats, lad = await _vt_lookup(sha256, client)
@@ -426,7 +433,7 @@ async def verify_and_scan(job_id: str, path: Path, ext: str) -> dict:
         if verdict in ("clean", "malicious", "suspicious") and stats:
             await _cache_store(sha256, verdict, stats, lad)
 
-    return await _apply_verdict(job_id, path, ext, verdict, sha256, stats, has_active)
+    return await _apply_verdict(job_id, path, ext, verdict, sha256, stats, has_active, lad=lad)
 
 
 async def _apply_verdict(
@@ -437,6 +444,7 @@ async def _apply_verdict(
     sha256: str,
     stats: dict,
     has_active_content: bool,
+    lad: str | None = None,
 ) -> dict:
     ready_dir = Path(settings.DATA_DIR) / "ready"
     ready_dir.mkdir(parents=True, exist_ok=True)
@@ -448,6 +456,20 @@ async def _apply_verdict(
     author = job.author if job else None
     now = datetime.now(timezone.utc).isoformat()
 
+    # VT detail surfaced to the UI (engine counts + scan date).
+    # Raw VT last_analysis_stats has no "total" key (cache rows do), so derive it
+    # from the sum of all engine categories when absent.
+    total = stats.get("total")
+    if total is None and stats:
+        total = sum(v for v in stats.values() if isinstance(v, int))
+    vt_fields = {
+        "sha256": sha256,
+        "vt_malicious": stats.get("malicious"),
+        "vt_suspicious": stats.get("suspicious"),
+        "vt_total": total,
+        "vt_analysis_date": lad,
+    }
+
     if verdict == "clean":
         dest = ready_dir / f"{job_id}.{ext}"
         path.rename(dest)
@@ -455,6 +477,8 @@ async def _apply_verdict(
             job_id,
             status="clean",
             download_url=f"/api/files/{job_id}",
+            ready_at=now,
+            **vt_fields,
         )
         log_event(
             "verdict",
@@ -482,7 +506,9 @@ async def _apply_verdict(
     if verdict in ("malicious", "suspicious"):
         path.unlink(missing_ok=True)
         detail = json.dumps(stats)
-        await job_svc.update_job(job_id, status="blocked", reason=verdict, detail=detail)
+        await job_svc.update_job(
+            job_id, status="blocked", reason=verdict, detail=detail, **vt_fields
+        )
         log_event(
             "block",
             user_id=user_id,
@@ -497,7 +523,7 @@ async def _apply_verdict(
     # unverified
     path.unlink(missing_ok=True)
     reason = "quota" if not stats else "scan_timeout"
-    await job_svc.update_job(job_id, status="unverified", reason=reason)
+    await job_svc.update_job(job_id, status="unverified", reason=reason, **vt_fields)
     log_event(
         "verdict",
         user_id=user_id,

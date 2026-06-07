@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -19,7 +18,13 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 async def _bootstrap_admin() -> None:
-    """Create the admin user on first run (users table empty). See BUILD.md §5."""
+    """Optionally seed the admin user on first run (users table empty).
+
+    If ADMIN_PASSWORD is set (>= 12 chars) we create an 'admin' user from it
+    (handy for automated deploys and the test suite). If it is empty, we do
+    NOT auto-create anyone: the first visit shows the /setup screen where the
+    operator picks their own admin username + password. See BUILD.md §5.
+    """
     async with get_db() as db:
         cur = await db.execute("SELECT COUNT(*) FROM users")
         (count,) = await cur.fetchone()
@@ -28,18 +33,18 @@ async def _bootstrap_admin() -> None:
         return
 
     password = settings.ADMIN_PASSWORD
-    must_change = 0
+    if not password:
+        # No seed password: defer to the first-run /setup flow.
+        print("[BookHub] No users yet — first visit will open the admin setup screen.", flush=True)
+        return
 
-    if not password or len(password) < 12:
-        if password:
-            print(
-                "[BookHub] ADMIN_PASSWORD is shorter than 12 chars; ignoring, using random.",
-                flush=True,
-            )
-        password = secrets.token_urlsafe(16)
-        must_change = 1
-        # Documented exception: password printed once to stdout for operator retrieval.
-        print(f"[BookHub] First-run admin password: {password}", flush=True)
+    if len(password) < 12:
+        print(
+            "[BookHub] ADMIN_PASSWORD is shorter than 12 chars; ignoring it. "
+            "First visit will open the admin setup screen.",
+            flush=True,
+        )
+        return
 
     now = datetime.now(timezone.utc).isoformat()
     password_hash = _auth.hash_password(password)
@@ -47,8 +52,8 @@ async def _bootstrap_admin() -> None:
     async with write_db() as db:
         await db.execute(
             "INSERT INTO users (username, password_hash, is_admin, must_change_password, created_at)"
-            " VALUES ('admin', ?, 1, ?, ?)",
-            (password_hash, must_change, now),
+            " VALUES ('admin', ?, 1, 0, ?)",
+            (password_hash, now),
         )
 
 

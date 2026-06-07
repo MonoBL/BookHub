@@ -1,13 +1,17 @@
-"""Job routes: POST /api/download, GET /api/jobs/{id}, GET /api/history. See BUILD.md §7.1."""
+"""Job routes: POST /api/download, GET /api/jobs/{id}, GET /api/history,
+GET /api/downloads. See BUILD.md §7.1."""
 import asyncio
 import uuid
 import re
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import require_user
-from app.db import get_db
+from app.config import settings
+from app.db import get_db, write_db
 from app.models import Job
 from app.providers import PROVIDERS
 from app.providers.base import SearchResult
@@ -77,7 +81,49 @@ async def get_job(job_id: str, user: dict = Depends(require_user)):
     job = await job_svc.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # IDOR: non-admin users can only see their own jobs.
+    if job.user_id is not None and job.user_id != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=404, detail="Job not found")
+
     return job.model_dump()
+
+
+@router.get("/downloads")
+async def pending_downloads(user: dict = Depends(require_user)):
+    """A user's ready-but-not-yet-grabbed downloads (per-user, file still on disk).
+
+    Lets someone who closed the tab by mistake recover their file before the
+    TTL sweep deletes it. Each entry carries when it expires.
+    """
+    ready_dir = Path(settings.DATA_DIR) / "ready"
+    ttl = timedelta(minutes=settings.FILE_TTL_MINUTES)
+    snapshot = await job_svc.all_jobs_snapshot()
+
+    out = []
+    for job_id, job in snapshot.items():
+        if job.status != "clean" or job.user_id != user["id"]:
+            continue
+        if not job.ext or not (ready_dir / f"{job_id}.{job.ext}").exists():
+            continue
+        expires_at = None
+        if job.ready_at:
+            try:
+                expires_at = (datetime.fromisoformat(job.ready_at) + ttl).isoformat()
+            except ValueError:
+                pass
+        out.append({
+            "job_id": job_id,
+            "title": job.title,
+            "ext": job.ext,
+            "source": job.source,
+            "download_url": f"/api/files/{job_id}",
+            "ready_at": job.ready_at,
+            "expires_at": expires_at,
+        })
+
+    out.sort(key=lambda d: d.get("ready_at") or "", reverse=True)
+    return out
 
 
 @router.get("/history")
@@ -90,3 +136,26 @@ async def history(user: dict = Depends(require_user)):
         )
         rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+@router.delete("/history/{entry_id}")
+async def delete_history_entry(entry_id: int, user: dict = Depends(require_user)):
+    """Delete one of the user's own history rows."""
+    async with write_db() as db:
+        cur = await db.execute(
+            "DELETE FROM history WHERE id = ? AND user_id = ?",
+            (entry_id, user["id"]),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="History entry not found")
+    return {"deleted": entry_id}
+
+
+@router.delete("/history")
+async def clear_history(user: dict = Depends(require_user)):
+    """Clear the user's entire history (their rows only)."""
+    async with write_db() as db:
+        cur = await db.execute(
+            "DELETE FROM history WHERE user_id = ?", (user["id"],)
+        )
+    return {"deleted": cur.rowcount}

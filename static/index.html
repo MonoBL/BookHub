@@ -42,6 +42,8 @@
 
     <div id="provider-banners"></div>
 
+    <div id="downloads-section" hidden></div>
+
     <div id="results-section" hidden>
       <h3 style="margin-bottom:0.75rem" id="results-title">Results</h3>
       <div class="card" style="padding:0;overflow:auto">
@@ -62,10 +64,13 @@
     </div>
 
     <div id="recent-section" hidden>
-      <h3 style="margin-bottom:0.75rem;margin-top:1.5rem">Recent</h3>
+      <div style="display:flex;align-items:center;gap:1rem;margin-top:1.5rem;margin-bottom:0.75rem">
+        <h3 style="margin:0">Recent</h3>
+        <button id="clear-history-btn" class="btn-danger" style="margin-left:auto;font-size:0.85rem;padding:0.3rem 0.8rem">Clear all</button>
+      </div>
       <div class="card" style="padding:0;overflow:auto">
         <table>
-          <thead><tr><th>Title</th><th>Format</th><th>Source</th><th>Verdict</th></tr></thead>
+          <thead><tr><th>Title</th><th>Format</th><th>Source</th><th>Verdict</th><th></th></tr></thead>
           <tbody id="recent-body"></tbody>
         </table>
       </div>

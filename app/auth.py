@@ -72,6 +72,16 @@ async def reset_rate_limit(rl_key: str) -> None:
         _failure_timestamps.pop(rl_key, None)
 
 
+# --- First-run setup ---
+
+async def user_count() -> int:
+    """Number of users. 0 means the app needs first-run admin setup."""
+    async with get_db() as db:
+        cur = await db.execute("SELECT COUNT(*) FROM users")
+        (count,) = await cur.fetchone()
+    return count
+
+
 # --- Sessions ---
 
 async def create_session(user_id: int) -> str:

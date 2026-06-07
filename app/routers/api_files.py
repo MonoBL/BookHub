@@ -16,7 +16,12 @@ _UUID4_RE = re.compile(
     re.IGNORECASE,
 )
 
-_CONTENT_TYPES = {"epub": "application/epub+zip", "pdf": "application/pdf"}
+_CONTENT_TYPES = {
+    "epub": "application/epub+zip",
+    "pdf": "application/pdf",
+    "bmp": "image/bmp",
+    "zip": "application/zip",
+}
 
 
 def _safe_filename(title: str | None, ext: str) -> str:
@@ -39,11 +44,18 @@ async def serve_file(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status not in ("clean", "consumed"):
+    # IDOR: non-admin users can only access their own jobs.
+    if job.user_id is not None and job.user_id != user["id"] and not user.get("is_admin"):
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status != "clean":
+        raise HTTPException(status_code=404, detail="File not available")
+
+    if await job_svc.is_in_flight(job_id):
         raise HTTPException(status_code=404, detail="File not available")
 
     ext = job.ext
-    if ext not in ("epub", "pdf"):
+    if ext not in _CONTENT_TYPES:
         raise HTTPException(status_code=400, detail="Invalid file type in job")
 
     ready_dir = Path(settings.DATA_DIR) / "ready"

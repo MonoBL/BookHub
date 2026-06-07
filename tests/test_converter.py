@@ -202,7 +202,7 @@ def test_ocr_skipped_on_high_density(tmp_path):
 def test_docker_cmd_has_security_flags(tmp_path):
     from app.services.converter import _docker_cmd
     pdf = tmp_path / "in.pdf"
-    cmd = _docker_cmd("test-job-id", pdf, "Title", "Author")
+    cmd = _docker_cmd("test-job-id", pdf, "Title", "Author", 600, 1200)
     cmd_str = " ".join(cmd)
 
     assert "--network=none" in cmd_str
@@ -212,10 +212,21 @@ def test_docker_cmd_has_security_flags(tmp_path):
     assert "no-new-privileges" in cmd_str
 
 
+def test_docker_cmd_passes_timeouts(tmp_path):
+    from app.services.converter import _docker_cmd
+    pdf = tmp_path / "in.pdf"
+    # Comic-mode timeouts must reach the worker as CLI args.
+    cmd = _docker_cmd("test-job-id", pdf, "Title", "Author", 2400, 3600)
+    assert "--convert-timeout" in cmd
+    assert cmd[cmd.index("--convert-timeout") + 1] == "2400"
+    assert "--ocr-timeout" in cmd
+    assert cmd[cmd.index("--ocr-timeout") + 1] == "3600"
+
+
 def test_docker_cmd_no_secrets_in_env(tmp_path):
     from app.services.converter import _docker_cmd
     pdf = tmp_path / "in.pdf"
-    cmd = _docker_cmd("test-job-id", pdf, "Title", "Author")
+    cmd = _docker_cmd("test-job-id", pdf, "Title", "Author", 600, 1200)
     cmd_str = " ".join(cmd)
 
     # No secrets in worker env (cross-cutting rule B)
@@ -227,13 +238,59 @@ def test_docker_cmd_no_secrets_in_env(tmp_path):
 def test_docker_cmd_mounts_only_job_dir(tmp_path):
     from app.services.converter import _docker_cmd
     pdf = tmp_path / "in.pdf"
-    cmd = _docker_cmd("test-job-id", pdf, "Title", "Author")
+    cmd = _docker_cmd("test-job-id", pdf, "Title", "Author", 600, 1200)
 
     mounts = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-v"]
     assert len(mounts) == 1, "Worker must have exactly one volume mount"
     host_dir = mounts[0].split(":")[0]
     # Must be the job scratch dir, not /data root or anything broader
     assert str(tmp_path) in host_dir
+
+
+def test_docker_cmd_has_container_name(tmp_path):
+    from app.services.converter import _docker_cmd
+    pdf = tmp_path / "in.pdf"
+    cmd = _docker_cmd("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", pdf, "Title", "Author", 600, 1200)
+    cmd_str = " ".join(cmd)
+    assert "--name" in cmd_str
+    assert "bookhub-conv-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" in cmd_str
+
+
+def test_docker_cmd_mount_translates_host_data_dir(tmp_path):
+    from app.services.converter import _docker_cmd
+    from app.config import settings
+    from unittest.mock import patch
+
+    # Simulate DATA_DIR=/data, HOST_DATA_DIR=/host/data
+    # pdf is at /data/jobs/testjob/in.pdf -> host mount should be /host/data/jobs/testjob
+    with (
+        patch.object(settings, "DATA_DIR", "/data"),
+        patch.object(settings, "HOST_DATA_DIR", "/host/data"),
+    ):
+        pdf = Path("/data/jobs/testjob/in.pdf")
+        cmd = _docker_cmd("test-job-id", pdf, "Title", "Author", 600, 1200)
+
+    mounts = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-v"]
+    host_dir = mounts[0].split(":")[0]
+    assert host_dir == "/host/data/jobs/testjob"
+
+
+def test_kill_container_runs_docker_kill():
+    from app.services.converter import _kill_container
+    from unittest.mock import patch, MagicMock
+
+    killed_cmds = []
+
+    def fake_run(cmd, **kw):
+        killed_cmds.append(cmd)
+        return MagicMock(returncode=0)
+
+    with patch("app.services.converter.subprocess.run", side_effect=fake_run):
+        _kill_container("bookhub-conv-test-job")
+
+    assert len(killed_cmds) == 1
+    assert "kill" in killed_cmds[0]
+    assert "bookhub-conv-test-job" in killed_cmds[0]
 
 
 # ---------------------------------------------------------------------------

@@ -234,120 +234,44 @@ def test_vk_disabled_when_no_token():
         assert p.enabled is False
 
 
-async def test_vk_search_returns_epub_pdf_only():
-    """VK search filters out non-epub/pdf extensions."""
+async def test_vk_deprecated_search_returns_empty_even_with_token():
+    """VK removed docs.search server-side; provider is hard-disabled.
+
+    Even with a valid token and a mocked client that would return items,
+    search must short-circuit to [] and never hit the network."""
     from app.providers.vk import VKProvider
-    _vk_mod._vk_disabled = False
 
-    items = [
-        {"id": 1, "title": "Book A", "ext": "epub", "size": 1000, "url": "https://vk.com/a.epub"},
-        {"id": 2, "title": "Book B", "ext": "pdf",  "size": 2000, "url": "https://vk.com/b.pdf"},
-        {"id": 3, "title": "Book C", "ext": "doc",  "size": 3000, "url": "https://vk.com/c.doc"},
-    ]
-
-    class FakeClient:
-        def __init__(self, **kw): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): pass
-        async def get(self, url, params=None, **kw): return _vk_response(items)
-
-    with (
-        patch("app.providers.vk.settings") as mock_cfg,
-        patch("app.providers.vk.httpx.AsyncClient", FakeClient),
-    ):
-        mock_cfg.VK_TOKEN = "testtoken"
-        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
-        p = VKProvider()
-        results = await p.search("book", [])
-
-    assert len(results) == 2
-    exts = {r.ext for r in results}
-    assert exts == {"epub", "pdf"}
-
-
-async def test_vk_search_ext_filter():
-    """VK search respects ext_filter."""
-    from app.providers.vk import VKProvider
-    _vk_mod._vk_disabled = False
-
-    items = [
-        {"id": 1, "title": "Book A", "ext": "epub", "size": 1000, "url": "https://vk.com/a.epub"},
-        {"id": 2, "title": "Book B", "ext": "pdf",  "size": 2000, "url": "https://vk.com/b.pdf"},
-    ]
-
-    class FakeClient:
-        def __init__(self, **kw): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): pass
-        async def get(self, url, params=None, **kw): return _vk_response(items)
-
-    with (
-        patch("app.providers.vk.settings") as mock_cfg,
-        patch("app.providers.vk.httpx.AsyncClient", FakeClient),
-    ):
-        mock_cfg.VK_TOKEN = "testtoken"
-        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
-        p = VKProvider()
-        results = await p.search("book", ["epub"])
-
-    assert all(r.ext == "epub" for r in results)
-
-
-async def test_vk_auth_error_disables_provider():
-    """VK error code 5 permanently disables the provider."""
-    from app.providers.vk import VKProvider
-    _vk_mod._vk_disabled = False
+    called = {"hit": False}
 
     class FakeClient:
         def __init__(self, **kw): pass
         async def __aenter__(self): return self
         async def __aexit__(self, *a): pass
         async def get(self, url, params=None, **kw):
-            return _vk_error_response(5, "User authorization failed")
+            called["hit"] = True
+            return _vk_response([{"id": 1, "title": "X", "ext": "epub", "url": "u"}])
 
     with (
         patch("app.providers.vk.settings") as mock_cfg,
         patch("app.providers.vk.httpx.AsyncClient", FakeClient),
     ):
-        mock_cfg.VK_TOKEN = "badtoken"
+        mock_cfg.VK_TOKEN = "validtoken"
         mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
         p = VKProvider()
         results = await p.search("book", [])
 
     assert results == []
-    assert _vk_mod._vk_disabled is True
-    # cleanup for other tests
-    _vk_mod._vk_disabled = False
+    assert called["hit"] is False  # no API call made
 
 
-async def test_vk_result_shape():
-    """VK results carry correct id format and source."""
+def test_vk_disabled_even_with_token():
+    """A valid token must not re-enable a deprecated provider."""
     from app.providers.vk import VKProvider
-    _vk_mod._vk_disabled = False
-
-    items = [{"id": 42, "title": "My Book", "ext": "epub", "size": 500, "url": "https://vk.com/x.epub"}]
-
-    class FakeClient:
-        def __init__(self, **kw): pass
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): pass
-        async def get(self, url, params=None, **kw): return _vk_response(items)
-
-    with (
-        patch("app.providers.vk.settings") as mock_cfg,
-        patch("app.providers.vk.httpx.AsyncClient", FakeClient),
-    ):
-        mock_cfg.VK_TOKEN = "tok"
-        mock_cfg.PROVIDER_SEARCH_TIMEOUT_S = 10
+    with patch("app.providers.vk.settings") as mock_cfg:
+        mock_cfg.VK_TOKEN = "validtoken"
         p = VKProvider()
-        results = await p.search("book", [])
-
-    assert len(results) == 1
-    r = results[0]
-    assert r.id == "vk:42"
-    assert r.source == "vk"
-    assert r.ext == "epub"
-    assert r.size_bytes == 500
+        assert p.enabled is False
+        assert getattr(p, "deprecated", False) is True
 
 
 # ===========================================================================

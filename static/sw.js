@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bookhub-v1";
+const CACHE_VERSION = "bookhub-v4";
 
 self.addEventListener("install", (e) => {
   self.skipWaiting();

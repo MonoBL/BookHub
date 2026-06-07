@@ -220,6 +220,10 @@ docker compose up -d
 docker compose logs -f bookhub # watch startup; first-run admin password prints here if ADMIN_PASSWORD unset
 ```
 
+> **Converter worker image:** `bookhub-converter:latest` must be built **on the Docker daemon host**, not inside the app container. The app launches it via `docker-socket-proxy`, and the daemon resolves image names from its own local registry. Run `docker build -t bookhub-converter:latest ./converter` on the VM host before starting the stack.
+
+> **`HOST_DATA_DIR`:** when the app runs in Docker and the converter is launched via `docker-socket-proxy`, the `-v` bind-mount path is resolved by the daemon on the **host** filesystem. Set `HOST_DATA_DIR` in `.env` to the host-side path that maps to `/data` inside the bookhub container (e.g. `/opt/bookhub/data`). Leave it empty for local dev where there is no container layer.
+
 - First launch initializes `data/app.db` and the `quarantine/`, `ready/`, `jobs/`
   directories.
 - Open the app (via the Cloudflare hostname, or `http://<vm-ip>:8000` on the LAN

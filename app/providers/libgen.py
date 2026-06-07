@@ -138,8 +138,9 @@ class LibgenProvider:
         if len(rows) < 2:
             return []
 
-        # Map header names -> column indices (fragment match, case-insensitive)
-        header_cells = rows[0].css("td")
+        # Map header names -> column indices (fragment match, case-insensitive).
+        # Live libgen uses <th> header cells; fall back to <td> for older layouts/fixtures.
+        header_cells = rows[0].css("th") or rows[0].css("td")
         headers = [c.text().strip().lower() for c in header_cells]
 
         def col_idx(fragment: str) -> int:
@@ -151,7 +152,7 @@ class LibgenProvider:
 
         title_idx = col_idx("title")
         author_idx = col_idx("author")
-        ext_idx = col_idx("extension")
+        ext_idx = col_idx("ext")
         size_idx = col_idx("size")
         mirrors_idx = col_idx("mirrors")
 
@@ -179,8 +180,14 @@ class LibgenProvider:
 
             title = ""
             if 0 <= title_idx < len(cells):
-                links = cells[title_idx].css("a")
-                title = links[0].text().strip() if links else cells[title_idx].text().strip()
+                # Pick the first link with non-empty text (skips cover/thumbnail anchors).
+                for link in cells[title_idx].css("a"):
+                    lt = link.text().strip()
+                    if lt:
+                        title = lt
+                        break
+                if not title:
+                    title = cells[title_idx].text().strip()
 
             author = cell_text(author_idx) if author_idx >= 0 else ""
             size_bytes = _parse_size(cell_text(size_idx)) if size_idx >= 0 else None
@@ -215,32 +222,47 @@ class LibgenProvider:
         if not md5:
             raise RuntimeError(f"No MD5 for Libgen result {result.id}")
 
-        base = result.extra.get("base") or await self._find_mirror()
-        if not base:
+        # Candidate mirrors: the one the result came from first, then the rest.
+        # ads.php is flaky (transient 500s), so fall back across mirrors.
+        preferred = result.extra.get("base")
+        candidates: list[str] = []
+        for m in ([preferred] if preferred else []) + [
+            f"https://{m.strip()}" for m in settings.LIBGEN_MIRRORS.split(",") if m.strip()
+        ]:
+            if m and m not in candidates:
+                candidates.append(m)
+        if not candidates:
             raise RuntimeError("No Libgen mirror available for resolve")
 
-        ads_url = f"{base}/ads.php?md5={md5}"
         timeout = settings.PROVIDER_RESOLVE_TIMEOUT_S
+        last_err = "no mirrors tried"
 
         async with httpx.AsyncClient(
             headers={"User-Agent": _BROWSER_UA},
             follow_redirects=True,
             timeout=float(timeout),
         ) as client:
-            r = await client.get(ads_url)
+            for base in candidates:
+                ads_url = f"{base}/ads.php?md5={md5}"
+                try:
+                    r = await client.get(ads_url)
+                except Exception as exc:
+                    last_err = f"ads.php request failed on {base}: {exc}"
+                    continue
+                if r.status_code >= 400 or self._is_cloudflare(r.status_code, r.text):
+                    last_err = f"ads.php HTTP {r.status_code} on {base}"
+                    continue
+                get_url = self._extract_get_url(r.text, ads_url)
+                if not get_url:
+                    last_err = f"no get.php key link on {base}"
+                    continue
+                return DownloadPlan(
+                    url=get_url,
+                    headers={"Referer": ads_url},
+                    cookies=dict(r.cookies),
+                )
 
-        if r.status_code >= 400:
-            raise RuntimeError(f"ads.php HTTP {r.status_code} for md5={md5}")
-
-        get_url = self._extract_get_url(r.text, ads_url)
-        if not get_url:
-            raise RuntimeError(f"No get.php key link in ads.php for md5={md5}")
-
-        return DownloadPlan(
-            url=get_url,
-            headers={"Referer": ads_url},
-            cookies=dict(r.cookies),
-        )
+        raise RuntimeError(f"Libgen resolve failed for md5={md5}: {last_err}")
 
     @staticmethod
     def _extract_get_url(html: str, ads_url: str) -> str | None:

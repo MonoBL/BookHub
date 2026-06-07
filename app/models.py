@@ -22,6 +22,13 @@ class Job(BaseModel):
     user_id: int | None = None
     source: str | None = None
     author: str | None = None
+    ready_at: str | None = None  # ISO ts when file landed in ready/ (drives TTL countdown)
+    # VirusTotal result detail (shown in UI)
+    sha256: str | None = None
+    vt_malicious: int | None = None
+    vt_suspicious: int | None = None
+    vt_total: int | None = None
+    vt_analysis_date: str | None = None  # ISO timestamp; frontend computes age
 
 
 class User(BaseModel):

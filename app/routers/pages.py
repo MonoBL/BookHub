@@ -16,6 +16,8 @@ async def _page_user(request: Request) -> dict | None:
 
 @router.get("/")
 async def index(request: Request):
+    if await auth.user_count() == 0:
+        return RedirectResponse("/setup", status_code=302)
     user = await _page_user(request)
     if not user:
         return RedirectResponse("/login", status_code=302)
@@ -24,8 +26,18 @@ async def index(request: Request):
     return FileResponse("static/index.html")
 
 
+@router.get("/setup")
+async def setup_page(request: Request):
+    # First-run only: once an admin exists, this screen is gone.
+    if await auth.user_count() > 0:
+        return RedirectResponse("/login", status_code=302)
+    return FileResponse("static/setup.html")
+
+
 @router.get("/login")
 async def login_page(request: Request):
+    if await auth.user_count() == 0:
+        return RedirectResponse("/setup", status_code=302)
     user = await _page_user(request)
     if user:
         target = "/change-password" if user["must_change_password"] else "/"
