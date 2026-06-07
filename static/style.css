@@ -133,7 +133,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   font-size: 0.9rem;
 }
 
-.job-status { font-size: 0.85rem; color: var(--muted); white-space: nowrap; }
+.job-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
 .job-status .stage { color: var(--text); }
 .stage { color: var(--text); }
 .elapsed { color: var(--muted); font-size: 0.85rem; }

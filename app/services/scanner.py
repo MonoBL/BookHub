@@ -532,9 +532,16 @@ async def _apply_verdict(
         )
         return {"verdict": "blocked", "sha256": sha256, "reason": verdict}
 
-    # unverified
+    # unverified: distinguish the causes so the UI is accurate.
+    #   - no stats          -> no usable VT result (quota / API error / poll timeout)
+    #   - stats but stale lad -> known file, but last scan is beyond the freshness window
     path.unlink(missing_ok=True)
-    reason = "quota" if not stats else "scan_timeout"
+    if not stats:
+        reason = "quota"
+    elif lad:
+        reason = "scan too old (use Re-scan)"
+    else:
+        reason = "scan_timeout"
     await job_svc.update_job(job_id, status="unverified", reason=reason, **vt_fields)
     log_event(
         "verdict",
