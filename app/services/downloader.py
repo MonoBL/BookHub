@@ -59,6 +59,37 @@ async def download(job_id: str, plan: DownloadPlan, ext: str) -> Path:
     return dest
 
 
+async def download_with_fallback(
+    job_id: str, plans: list[DownloadPlan], ext: str
+) -> Path:
+    """Try each candidate download URL until one succeeds.
+
+    Libgen hands out get.php links on CDN hosts (e.g. cdn3.booksdl.lc) that
+    sometimes 503 a server's datacenter IP while serving residential IPs fine.
+    Different mirrors point at different CDN hosts, so we fall back across the
+    distinct candidates the provider resolved. A size-cap 'blocked' is final
+    and stops the loop (retrying other hosts would hit the same oversized file).
+    """
+    if not plans:
+        raise RuntimeError("no download candidates")
+
+    last_exc: Exception | None = None
+    for i, plan in enumerate(plans, start=1):
+        try:
+            return await download(job_id, plan, ext)
+        except RuntimeError as exc:
+            last_exc = exc
+            current = await job_svc.get_job(job_id)
+            if current and current.status == "blocked":
+                raise
+            logger.warning(
+                "download candidate %d/%d failed job=%s: %s",
+                i, len(plans), job_id, exc,
+            )
+
+    raise last_exc or RuntimeError("all download candidates failed")
+
+
 async def _stream(job_id: str, plan: DownloadPlan, dest: Path, max_bytes: int) -> None:
     timeout = httpx.Timeout(connect=60.0, read=30.0, write=30.0, pool=5.0)
 

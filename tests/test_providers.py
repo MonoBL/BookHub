@@ -5,6 +5,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from urllib.parse import urlsplit
+
+from app.providers.base import DownloadPlan, SearchResult
 from app.providers.libgen import LibgenProvider, _parse_size
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -189,6 +192,94 @@ async def test_libgen_mirror_all_down_returns_none():
         result = await provider._find_mirror()
 
     assert result is None
+
+
+# --- resolve_candidates: distinct CDN hosts across mirrors ---
+
+async def test_libgen_resolve_candidates_dedupes_by_host():
+    """Mirrors handing the same CDN host collapse to one plan; distinct hosts stack."""
+    provider = LibgenProvider()
+
+    class FakeResp:
+        def __init__(self, status, text):
+            self.status_code = status
+            self.text = text
+            self.cookies = {}
+
+    # m1 -> host A, m2 -> host A again (dup), m3 -> host B
+    pages = {
+        "m1": "<a href='https://cdnA/get.php?md5=x&key=K1'>g</a>",
+        "m2": "<a href='https://cdnA/get.php?md5=x&key=K2'>g</a>",
+        "m3": "<a href='https://cdnB/get.php?md5=x&key=K3'>g</a>",
+    }
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw):
+            for m, body in pages.items():
+                if f"//{m}/" in url:
+                    return FakeResp(200, body)
+            return FakeResp(404, "")
+
+    result = SearchResult(id="libgen:x", title="T", ext="epub", source="libgen", extra={"md5": "x"})
+    with patch("app.providers.libgen.settings") as cfg, \
+         patch("app.providers.libgen.httpx.AsyncClient", FakeClient):
+        cfg.LIBGEN_MIRRORS = "m1,m2,m3"
+        cfg.PROVIDER_RESOLVE_TIMEOUT_S = 30
+        plans = await provider.resolve_candidates(result)
+
+    hosts = [urlsplit(p.url).netloc for p in plans]
+    assert hosts == ["cdnA", "cdnB"]
+
+
+# --- download fallback across candidates ---
+
+async def test_download_with_fallback_tries_next_on_failure():
+    """First candidate 503s, second succeeds -> returns the good path."""
+    from app.services import downloader
+
+    calls = []
+
+    async def fake_download(job_id, plan, ext):
+        calls.append(plan.url)
+        if plan.url.endswith("bad"):
+            raise RuntimeError("Server error '503'")
+        return Path(f"/tmp/{job_id}.{ext}")
+
+    async def fake_get_job(job_id):
+        return MagicMock(status="error")
+
+    plans = [DownloadPlan(url="https://cdnA/bad"), DownloadPlan(url="https://cdnB/good")]
+    with patch.object(downloader, "download", fake_download), \
+         patch.object(downloader.job_svc, "get_job", fake_get_job):
+        path = await downloader.download_with_fallback("job1", plans, "epub")
+
+    assert str(path).endswith("job1.epub")
+    assert calls == ["https://cdnA/bad", "https://cdnB/good"]
+
+
+async def test_download_with_fallback_blocked_is_final():
+    """A size-cap 'blocked' stops the loop without trying other hosts."""
+    from app.services import downloader
+
+    calls = []
+
+    async def fake_download(job_id, plan, ext):
+        calls.append(plan.url)
+        raise RuntimeError("exceeds size cap")
+
+    async def fake_get_job(job_id):
+        return MagicMock(status="blocked")
+
+    plans = [DownloadPlan(url="https://cdnA/big"), DownloadPlan(url="https://cdnB/big")]
+    with patch.object(downloader, "download", fake_download), \
+         patch.object(downloader.job_svc, "get_job", fake_get_job):
+        with pytest.raises(RuntimeError, match="size cap"):
+            await downloader.download_with_fallback("job1", plans, "epub")
+
+    assert calls == ["https://cdnA/big"]  # did not try the second host
 
 
 # --- _parse_size helper ---

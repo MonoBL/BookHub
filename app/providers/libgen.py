@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlsplit
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -217,32 +217,41 @@ class LibgenProvider:
                     return m.group(1).lower()
         return None
 
-    async def resolve(self, result: SearchResult) -> DownloadPlan:
+    async def resolve_candidates(self, result: SearchResult) -> list[DownloadPlan]:
+        """Resolve every distinct download URL across mirrors.
+
+        Each mirror's ads.php hands out a get.php link on some CDN host. A host
+        that 503s our server IP keeps 503ing regardless of the key, so we gather
+        one plan per *distinct host* and let the downloader fall back across
+        them. Hitting all mirrors costs a few extra ads.php requests at resolve
+        time, but makes the download robust to a single dead CDN.
+        """
         md5 = result.extra.get("md5")
         if not md5:
             raise RuntimeError(f"No MD5 for Libgen result {result.id}")
 
         # Candidate mirrors: the one the result came from first, then the rest.
-        # ads.php is flaky (transient 500s), so fall back across mirrors.
         preferred = result.extra.get("base")
-        candidates: list[str] = []
+        mirror_bases: list[str] = []
         for m in ([preferred] if preferred else []) + [
             f"https://{m.strip()}" for m in settings.LIBGEN_MIRRORS.split(",") if m.strip()
         ]:
-            if m and m not in candidates:
-                candidates.append(m)
-        if not candidates:
+            if m and m not in mirror_bases:
+                mirror_bases.append(m)
+        if not mirror_bases:
             raise RuntimeError("No Libgen mirror available for resolve")
 
         timeout = settings.PROVIDER_RESOLVE_TIMEOUT_S
         last_err = "no mirrors tried"
+        plans: list[DownloadPlan] = []
+        seen_hosts: set[str] = set()
 
         async with httpx.AsyncClient(
             headers={"User-Agent": _BROWSER_UA},
             follow_redirects=True,
             timeout=float(timeout),
         ) as client:
-            for base in candidates:
+            for base in mirror_bases:
                 ads_url = f"{base}/ads.php?md5={md5}"
                 try:
                     r = await client.get(ads_url)
@@ -256,13 +265,23 @@ class LibgenProvider:
                 if not get_url:
                     last_err = f"no get.php key link on {base}"
                     continue
-                return DownloadPlan(
+                host = urlsplit(get_url).netloc
+                if host in seen_hosts:
+                    continue
+                seen_hosts.add(host)
+                plans.append(DownloadPlan(
                     url=get_url,
                     headers={"Referer": ads_url},
                     cookies=dict(r.cookies),
-                )
+                ))
 
-        raise RuntimeError(f"Libgen resolve failed for md5={md5}: {last_err}")
+        if not plans:
+            raise RuntimeError(f"Libgen resolve failed for md5={md5}: {last_err}")
+        return plans
+
+    async def resolve(self, result: SearchResult) -> DownloadPlan:
+        """First available candidate (kept for the single-plan Provider API)."""
+        return (await self.resolve_candidates(result))[0]
 
     @staticmethod
     def _extract_get_url(html: str, ads_url: str) -> str | None:

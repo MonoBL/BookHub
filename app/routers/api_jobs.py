@@ -17,7 +17,7 @@ from app.models import Job
 from app.providers import PROVIDERS
 from app.providers.base import SearchResult
 from app.services import jobs as job_svc
-from app.services.downloader import download
+from app.services.downloader import download_with_fallback
 from app.services.scanner import verify_and_scan
 
 router = APIRouter()
@@ -66,8 +66,13 @@ async def start_download(
 
 async def _run_pipeline(job_id: str, result: SearchResult, provider, ext: str) -> None:
     try:
-        plan = await provider.resolve(result)
-        path = await download(job_id, plan, ext)
+        # Providers that can yield multiple CDN hosts (Libgen) let the
+        # downloader fall back when one host 503s our server IP.
+        if hasattr(provider, "resolve_candidates"):
+            plans = await provider.resolve_candidates(result)
+        else:
+            plans = [await provider.resolve(result)]
+        path = await download_with_fallback(job_id, plans, ext)
         await verify_and_scan(job_id, path, ext)
     except Exception as exc:
         current = await job_svc.get_job(job_id)
