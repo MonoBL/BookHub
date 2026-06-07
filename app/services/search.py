@@ -46,9 +46,11 @@ def _dedup_results(all_results: list[SearchResult]) -> list[SearchResult]:
             sources = existing.extra.get("sources", [existing.source])
             if r.source not in sources:
                 sources.append(r.source)
-            groups[key] = existing.model_copy(
-                update={"extra": {**existing.extra, "sources": sources}}
-            )
+            update: dict = {"extra": {**existing.extra, "sources": sources}}
+            # Adopt a cover from a later source if the kept row had none.
+            if not existing.cover_url and r.cover_url:
+                update["cover_url"] = r.cover_url
+            groups[key] = existing.model_copy(update=update)
         else:
             groups[key] = r.model_copy(
                 update={"extra": {**r.extra, "sources": [r.source]}}

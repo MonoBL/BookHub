@@ -71,6 +71,13 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
+function coverPlaceholder() {
+  const span = document.createElement("span");
+  span.className = "cover cover-empty";
+  span.textContent = "📕";
+  return span;
+}
+
 function fmtSize(bytes) {
   if (!bytes) return "";
   if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + " MB";
@@ -125,7 +132,12 @@ function renderResult(r, idx) {
     ? `<span class="badge badge-warn" title="Contains JS/remote refs">active content</span>`
     : "";
 
+  const cover = r.cover_url
+    ? `<img class="cover" loading="lazy" alt="" src="/api/cover?u=${encodeURIComponent(r.cover_url)}">`
+    : coverPlaceholder().outerHTML;
+
   return `<tr id="row-${idx}">
+    <td class="cover-cell">${cover}</td>
     <td>${esc(r.title)}</td>
     <td>${esc(r.author || "")}</td>
     <td>${esc(fmtSize(r.size_bytes))}</td>
@@ -170,6 +182,11 @@ form.addEventListener("submit", async (e) => {
     // Attach Get buttons.
     document.querySelectorAll(".btn-get").forEach((btn) => {
       btn.addEventListener("click", () => startDownload(Number(btn.dataset.idx)));
+    });
+
+    // Swap broken/blocked cover images for the placeholder (CSP forbids inline onerror).
+    document.querySelectorAll("img.cover").forEach((img) => {
+      img.addEventListener("error", () => img.replaceWith(coverPlaceholder()));
     });
   } catch (err) {
     bannersEl.innerHTML = `<div class="banner-warn">Search failed: ${esc(err.message)}</div>`;

@@ -9,6 +9,7 @@ class SearchResult(BaseModel):
     ext: str
     size_bytes: int | None = None
     source: str
+    cover_url: str | None = None  # absolute URL on a provider host; served via /api/cover proxy
     extra: dict = {}
 
 

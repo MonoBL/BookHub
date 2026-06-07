@@ -191,6 +191,7 @@ class LibgenProvider:
 
             author = cell_text(author_idx) if author_idx >= 0 else ""
             size_bytes = _parse_size(cell_text(size_idx)) if size_idx >= 0 else None
+            cover_url = self._extract_cover(row, base)
 
             results.append(SearchResult(
                 id=f"libgen:{md5}",
@@ -199,10 +200,32 @@ class LibgenProvider:
                 ext=ext,
                 size_bytes=size_bytes,
                 source="libgen",
+                cover_url=cover_url,
                 extra={"md5": md5, "base": base},
             ))
 
         return results
+
+    @staticmethod
+    def _extract_cover(row, base: str) -> str | None:
+        """Pull the cover thumbnail URL from a result row, made absolute.
+
+        Live libgen rows carry a small <img> (often lazy-loaded via data-src).
+        Returns None when the row has no usable cover.
+        """
+        img = row.css_first("img")
+        if img is None:
+            return None
+        src = (
+            img.attributes.get("data-src")
+            or img.attributes.get("data-original")
+            or img.attributes.get("src")
+            or ""
+        ).strip()
+        # Skip inline placeholders (blank.png, data: URIs, 1px spacers).
+        if not src or src.startswith("data:") or "blank" in src.lower():
+            return None
+        return urljoin(base + "/", src)
 
     @staticmethod
     def _extract_md5(cells, mirrors_idx: int, title_idx: int) -> str | None:

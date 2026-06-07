@@ -194,6 +194,45 @@ async def test_libgen_mirror_all_down_returns_none():
     assert result is None
 
 
+# --- cover parsing ---
+
+def test_libgen_parse_extracts_cover_url():
+    """A row <img> becomes an absolute cover_url; data-src wins over src."""
+    html = """
+    <table id="tablelibgen"><tbody>
+    <tr style="font-weight:bold"><td>ID</td><td>Title</td><td>Author(s)</td>
+      <td>Size</td><td>Extension</td><td>Mirrors</td></tr>
+    <tr>
+      <td><img src="/img/blank.png" data-src="/covers/abc.jpg"></td>
+      <td><a href="/book/index.php?md5=aabbcc1234567890aabbcc1234567890">A Book</a></td>
+      <td>Someone</td><td>1 Mb</td><td>epub</td>
+      <td><a href="/ads.php?md5=aabbcc1234567890aabbcc1234567890">GET</a></td>
+    </tr>
+    </tbody></table>"""
+    provider = LibgenProvider()
+    results = provider._parse_results(html, "https://libgen.la", [])
+    assert len(results) == 1
+    assert results[0].cover_url == "https://libgen.la/covers/abc.jpg"
+
+
+def test_libgen_parse_skips_blank_cover():
+    """Placeholder/blank images yield no cover_url."""
+    html = """
+    <table id="tablelibgen"><tbody>
+    <tr style="font-weight:bold"><td>Title</td><td>Extension</td><td>Mirrors</td></tr>
+    <tr>
+      <td><a href="/book/index.php?md5=ff00ff1234567890ff00ff1234567890">B</a>
+          <img src="https://libgen.la/img/blank.png"></td>
+      <td>pdf</td>
+      <td><a href="/ads.php?md5=ff00ff1234567890ff00ff1234567890">GET</a></td>
+    </tr>
+    </tbody></table>"""
+    provider = LibgenProvider()
+    results = provider._parse_results(html, "https://libgen.la", [])
+    assert len(results) == 1
+    assert results[0].cover_url is None
+
+
 # --- resolve_candidates: distinct CDN hosts across mirrors ---
 
 async def test_libgen_resolve_candidates_dedupes_by_host():

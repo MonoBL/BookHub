@@ -134,3 +134,23 @@ def test_double_serve_second_request_gets_404(client, admin_token):
     # Second serve: status is now "consumed" -> 404
     r2 = client.get(f"/api/files/{job_id}", cookies=_cookies(admin_token))
     assert r2.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Cover proxy SSRF guard
+# ---------------------------------------------------------------------------
+
+def test_cover_proxy_rejects_unknown_host(client, admin_token):
+    r = client.get(
+        "/api/cover", params={"u": "https://evil.example.com/x.jpg"},
+        cookies=_cookies(admin_token),
+    )
+    assert r.status_code == 400
+
+
+def test_cover_proxy_rejects_non_https(client, admin_token):
+    r = client.get(
+        "/api/cover", params={"u": "http://libgen.la/covers/x.jpg"},
+        cookies=_cookies(admin_token),
+    )
+    assert r.status_code == 400
