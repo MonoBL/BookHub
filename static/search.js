@@ -193,18 +193,18 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-async function startDownload(idx) {
+async function startDownload(idx, forceRescan = false) {
   const result = _results[idx];
   const statusEl = document.getElementById(`status-${idx}`);
   const btn = document.querySelector(`[data-idx="${idx}"]`);
   btn.disabled = true;
-  statusEl.textContent = "Starting…";
+  statusEl.textContent = forceRescan ? "Re-scanning…" : "Starting…";
 
   let jobId;
   try {
     const r = await api("/api/download", {
       method: "POST",
-      body: JSON.stringify({ result }),
+      body: JSON.stringify({ result, force_rescan: forceRescan }),
     });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
@@ -237,7 +237,14 @@ async function startDownload(idx) {
         `<span class="progress"></span>`;
     } else {
       const label = statusLabel(job);
-      statusEl.innerHTML = `${esc(label || "")}${vtSummary(job)}`;
+      // Unverified files were deleted unscanned; offer a forced re-scan that
+      // re-downloads and requests a fresh VirusTotal analysis.
+      const rescan = job.status === "unverified"
+        ? ` <button class="btn-rescan" data-idx="${idx}">Re-scan</button>`
+        : "";
+      statusEl.innerHTML = `${esc(label || "")}${vtSummary(job)}${rescan}`;
+      const rb = statusEl.querySelector(".btn-rescan");
+      if (rb) rb.addEventListener("click", () => startDownload(idx, true));
     }
   });
 }

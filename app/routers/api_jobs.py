@@ -30,6 +30,7 @@ _UUID4_RE = re.compile(
 
 class DownloadRequest(BaseModel):
     result: dict  # SearchResult as dict
+    force_rescan: bool = False  # user-initiated re-scan: force fresh VT analysis
 
 
 @router.post("/download")
@@ -60,11 +61,13 @@ async def start_download(
         await job_svc.update_job(job_id, status="error", reason=f"provider '{result.source}' not available")
         return {"job_id": job_id}
 
-    asyncio.create_task(_run_pipeline(job_id, result, provider, ext))
+    asyncio.create_task(_run_pipeline(job_id, result, provider, ext, body.force_rescan))
     return {"job_id": job_id}
 
 
-async def _run_pipeline(job_id: str, result: SearchResult, provider, ext: str) -> None:
+async def _run_pipeline(
+    job_id: str, result: SearchResult, provider, ext: str, force_rescan: bool = False
+) -> None:
     try:
         # Providers that can yield multiple CDN hosts (Libgen) let the
         # downloader fall back when one host 503s our server IP.
@@ -73,7 +76,7 @@ async def _run_pipeline(job_id: str, result: SearchResult, provider, ext: str) -
         else:
             plans = [await provider.resolve(result)]
         path = await download_with_fallback(job_id, plans, ext)
-        await verify_and_scan(job_id, path, ext)
+        await verify_and_scan(job_id, path, ext, force_rescan=force_rescan)
     except Exception as exc:
         current = await job_svc.get_job(job_id)
         if current and current.status not in ("blocked", "unverified", "clean"):

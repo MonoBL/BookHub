@@ -378,10 +378,16 @@ async def _vt_upload_and_poll(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-async def verify_and_scan(job_id: str, path: Path, ext: str) -> dict:
+async def verify_and_scan(
+    job_id: str, path: Path, ext: str, force_rescan: bool = False
+) -> dict:
     """
     Run format verify then VT scan. Updates job status throughout.
     Returns {"verdict": ..., "sha256": ..., "has_active_content": ..., "reason": ...}.
+
+    force_rescan (user-initiated "Re-scan"): bypass the local cache and force a
+    fresh VirusTotal upload+analysis instead of trusting an existing VT record,
+    so a stale or borderline verdict can be refreshed on demand.
     """
     # Format verification (in the main process, before VT).
     await job_svc.update_job(job_id, status="verifying")
@@ -405,8 +411,8 @@ async def verify_and_scan(job_id: str, path: Path, ext: str) -> dict:
     async with sem:
         sha256 = sha256_file(path)
 
-        # Cache lookup.
-        cached = await _cache_lookup(sha256)
+        # Cache lookup (skipped on a user-forced re-scan).
+        cached = None if force_rescan else await _cache_lookup(sha256)
         if cached:
             verdict = cached["verdict"]
             stats = {
@@ -420,14 +426,20 @@ async def verify_and_scan(job_id: str, path: Path, ext: str) -> dict:
             )
 
         async with httpx.AsyncClient() as client:
-            verdict, stats, lad = await _vt_lookup(sha256, client)
+            too_large = path.stat().st_size > _VT_UPLOAD_CAP_BYTES
 
-            if verdict == "not_found":  # type: ignore[comparison-overlap]
-                if path.stat().st_size > _VT_UPLOAD_CAP_BYTES:
-                    verdict = "unverified"
-                    lad = None
-                else:
-                    verdict, stats, lad = await _vt_upload_and_poll(path, sha256, client)
+            if force_rescan and not too_large:
+                # Skip the lookup entirely and request a fresh analysis.
+                verdict, stats, lad = await _vt_upload_and_poll(path, sha256, client)
+            else:
+                verdict, stats, lad = await _vt_lookup(sha256, client)
+
+                if verdict == "not_found":  # type: ignore[comparison-overlap]
+                    if too_large:
+                        verdict = "unverified"
+                        lad = None
+                    else:
+                        verdict, stats, lad = await _vt_upload_and_poll(path, sha256, client)
 
         # Cache the result if we have useful data.
         if verdict in ("clean", "malicious", "suspicious") and stats:

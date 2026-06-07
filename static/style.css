@@ -102,6 +102,17 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   font-size: 0.9rem;
 }
 
+.btn-rescan {
+  background: transparent;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: 4px;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.btn-rescan:hover { background: var(--warn); color: #000; }
+
 .banner-warn {
   background: #3e2a00;
   border: 1px solid var(--warn);

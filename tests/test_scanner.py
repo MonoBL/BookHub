@@ -290,3 +290,58 @@ async def test_file_deleted_after_serve(tmp_path):
     job = await job_svc.get_job(job_id)
     assert job.status == "clean"
     assert job.download_url == f"/api/files/{job_id}"
+
+
+# ---------------------------------------------------------------------------
+# Forced re-scan
+# ---------------------------------------------------------------------------
+
+async def test_force_rescan_skips_cache_and_forces_upload(tmp_path):
+    """force_rescan must bypass the cache + lookup and request a fresh VT scan."""
+    import app.services.scanner as sc_mod
+    from app.services import jobs as job_svc
+    from app.models import Job
+
+    job_id = "33333333-3333-4333-8333-333333333333"
+    await job_svc.create_job(Job(id=job_id, status="downloading", ext="epub", title="t"))
+
+    q = tmp_path / "quarantine"
+    q.mkdir()
+    src = q / f"{job_id}.epub"
+    src.write_bytes((FIXTURES / "real.epub").read_bytes())
+
+    cache_called = False
+    lookup_called = False
+    upload_called = False
+
+    async def fake_cache(sha):
+        nonlocal cache_called
+        cache_called = True
+        return {"verdict": "clean", "malicious_count": 0, "suspicious_count": 0,
+                "engines_total": 70, "last_analysis_date": "2020-01-01T00:00:00+00:00"}
+
+    async def fake_lookup(sha, client):
+        nonlocal lookup_called
+        lookup_called = True
+        return "clean", {"malicious": 0, "total": 70}, "2020-01-01T00:00:00+00:00"
+
+    async def fake_upload(path, sha, client):
+        nonlocal upload_called
+        upload_called = True
+        return "clean", {"malicious": 0, "suspicious": 0, "total": 72}, "2026-06-08T00:00:00+00:00"
+
+    with patch.object(sc_mod, "_cache_lookup", fake_cache), \
+         patch.object(sc_mod, "_vt_lookup", fake_lookup), \
+         patch.object(sc_mod, "_vt_upload_and_poll", fake_upload), \
+         patch.object(sc_mod, "_cache_store", AsyncMock()), \
+         patch.object(sc_mod, "settings") as ms:
+        ms.DATA_DIR = str(tmp_path)
+        ms.VT_API_KEY = "x"
+        ms.SCAN_CONCURRENCY = 1
+        ms.VT_DAILY_CAP = 480
+        result = await sc_mod.verify_and_scan(job_id, src, "epub", force_rescan=True)
+
+    assert result["verdict"] == "clean"
+    assert upload_called is True
+    assert cache_called is False
+    assert lookup_called is False

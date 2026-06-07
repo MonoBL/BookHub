@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # VirusTotal
     VT_API_KEY: str = ""
-    VT_CLEAN_MAX_AGE_DAYS: int = 180
+    VT_CLEAN_MAX_AGE_DAYS: int = 1825  # 5y: old books keep an old-but-valid VT scan
     VT_MIN_ENGINES: int = 40
     VT_DAILY_CAP: int = 480
 
