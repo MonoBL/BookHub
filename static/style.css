@@ -242,6 +242,19 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid #333; }
 th { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
 
+/* Fixed layout so the action column can't expand to fit a long status line
+   (verdict + VT badge + Re-scan button) and push content off-screen. Cells
+   wrap their content within the assigned column width instead. */
+#results-table { table-layout: fixed; }
+#results-table td { vertical-align: top; overflow-wrap: anywhere; }
+#results-table .col-cover  { width: 52px; }
+#results-table .col-title  { width: 28%; }
+#results-table .col-author { width: 16%; }
+#results-table .col-size   { width: 64px; }
+#results-table .col-format { width: 92px; }
+#results-table .col-source { width: 82px; }
+#results-table .col-action { width: 210px; }
+
 .cover-cell { width: 44px; padding-right: 0; }
 .cover {
   width: 40px; height: 56px;
