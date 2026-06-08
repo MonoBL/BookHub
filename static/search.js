@@ -138,12 +138,12 @@ function renderResult(r, idx) {
 
   return `<tr id="row-${idx}">
     <td class="cover-cell">${cover}</td>
-    <td>${esc(r.title)}</td>
-    <td>${esc(r.author || "")}</td>
-    <td>${esc(fmtSize(r.size_bytes))}</td>
-    <td><span class="badge badge-${esc(r.ext)}">${esc(r.ext.toUpperCase())}</span>${activeWarn}</td>
-    <td>${srcBadges}</td>
-    <td><button class="btn-get" data-idx="${idx}">Get</button> <span class="job-status" id="status-${idx}"></span></td>
+    <td data-label="Title">${esc(r.title)}</td>
+    <td data-label="Author">${esc(r.author || "")}</td>
+    <td data-label="Size">${esc(fmtSize(r.size_bytes))}</td>
+    <td data-label="Format"><span class="badge badge-${esc(r.ext)}">${esc(r.ext.toUpperCase())}</span>${activeWarn}</td>
+    <td data-label="Source">${srcBadges}</td>
+    <td data-label="" class="action-cell"><button class="btn-get" data-idx="${idx}">Get</button> <span class="job-status" id="status-${idx}"></span></td>
   </tr>`;
 }
 

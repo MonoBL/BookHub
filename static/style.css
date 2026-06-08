@@ -289,4 +289,58 @@ th { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
 @media (max-width: 600px) {
   header { flex-wrap: wrap; }
   main { padding: 1rem; }
+
+  /* Stacked cards instead of a squeezed fixed table. Each result becomes a
+     block; cell labels come from data-label via ::before. */
+  #results-table { table-layout: auto; }
+  #results-table thead { display: none; }
+  #results-table,
+  #results-table tbody,
+  #results-table tr,
+  #results-table td { display: block; width: auto; }
+
+  #results-table tr {
+    padding: 0.75rem 0.9rem;
+    border-bottom: 1px solid #333;
+  }
+  #results-table tr:hover { background: transparent; }
+
+  #results-table td {
+    padding: 0.25rem 0;
+    border-bottom: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    overflow-wrap: anywhere;
+  }
+  #results-table td[data-label]::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: 0 0 auto;
+  }
+  /* value side aligned right, allowed to wrap normally */
+  #results-table td > * { text-align: right; }
+
+  /* cover sits centered at the top of the card */
+  #results-table td.cover-cell {
+    display: block;
+    width: auto;
+    padding: 0 0 0.5rem;
+  }
+  #results-table td.cover-cell::before { content: none; }
+  #results-table .cover { width: 56px; height: 78px; }
+
+  /* action row: full-width Get button, no label */
+  #results-table td.action-cell {
+    display: block;
+    padding-top: 0.6rem;
+  }
+  #results-table td.action-cell::before { content: none; }
+  #results-table td.action-cell .btn-get { width: 100%; }
+  #results-table td.action-cell > * { text-align: center; }
 }
