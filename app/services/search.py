@@ -104,6 +104,10 @@ async def search(query: str, ext_filter: list[str]) -> dict[str, Any]:
 
     deduped = _dedup_results(all_results)
 
+    # Smallest first: for an e-reader the small reflowable edition beats a giant
+    # scan, and it stays under the download cap. Unknown sizes sort last.
+    deduped.sort(key=lambda r: r.size_bytes if r.size_bytes is not None else float("inf"))
+
     return {
         "results": [r.model_dump() for r in deduped],
         "providers": [s.model_dump() for s in statuses],

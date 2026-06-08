@@ -165,3 +165,29 @@ def test_job_status_readable_after_create(client, token):
         "queued", "downloading", "verifying", "scanning",
         "clean", "blocked", "unverified", "error",
     )
+
+
+# ---------------------------------------------------------------------------
+# Result ordering: smallest file first, unknown sizes last
+# ---------------------------------------------------------------------------
+
+async def test_search_sorts_by_size_ascending(monkeypatch):
+    from app.services import search as search_mod
+    from app.providers.base import SearchResult
+
+    class FakeProvider:
+        name = "fake"
+        enabled = True
+        async def search(self, query, ext_filter):
+            return [
+                SearchResult(id="fake:a", title="Big", ext="epub", source="fake", size_bytes=5_000_000),
+                SearchResult(id="fake:b", title="Unknown", ext="epub", source="fake", size_bytes=None),
+                SearchResult(id="fake:c", title="Small", ext="epub", source="fake", size_bytes=200_000),
+            ]
+
+    monkeypatch.setattr(search_mod, "PROVIDERS", [FakeProvider()])
+    search_mod._cache.clear()
+
+    out = await search_mod.search("anything", ["epub"])
+    titles = [r["title"] for r in out["results"]]
+    assert titles == ["Small", "Big", "Unknown"]
