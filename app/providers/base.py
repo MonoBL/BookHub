@@ -24,6 +24,10 @@ class DownloadPlan(BaseModel):
     url: str
     headers: dict = {}
     cookies: dict = {}
+    # Known file size, when the provider learns it at resolve time (e.g. archive.org
+    # metadata). Lets the pipeline decide to hand out a direct link instead of
+    # pulling an oversized file through the server. None = unknown.
+    size_bytes: int | None = None
 
 
 @runtime_checkable

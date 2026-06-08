@@ -75,6 +75,22 @@ async def _run_pipeline(
             plans = await provider.resolve_candidates(result)
         else:
             plans = [await provider.resolve(result)]
+
+        # Oversized public files (e.g. archive.org comics/scans) would only hit
+        # the download size cap. Rather than fail, hand the user the direct link
+        # so they fetch it straight from the source. Only for sources whose URLs
+        # are stable, public and safe to share (archive.org); Libgen/AA links are
+        # one-shot, gated, or behind Cloudflare and must keep going through us.
+        cap = settings.DOWNLOAD_MAX_MB * 1024 * 1024
+        if result.source == "archive" and plans and plans[0].size_bytes and plans[0].size_bytes > cap:
+            await job_svc.update_job(
+                job_id,
+                status="external",
+                download_url=plans[0].url,
+                reason=f"{plans[0].size_bytes // (1024 * 1024)} MB — too large to process here",
+            )
+            return
+
         path = await download_with_fallback(job_id, plans, ext)
         await verify_and_scan(job_id, path, ext, force_rescan=force_rescan)
     except Exception as exc:

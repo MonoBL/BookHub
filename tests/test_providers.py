@@ -518,3 +518,118 @@ async def test_annas_resolve_uses_stored_url():
     p = AnnasProvider()
     plan = await p.resolve(result)
     assert plan.url == "https://cdn.annas.org/abc.epub"
+
+
+# ===========================================================================
+# Internet Archive (archive.org) provider tests
+# ===========================================================================
+
+from app.providers.archive import (
+    ArchiveProvider,
+    _exts_to_formats,
+    _file_ext,
+    _normalize_formats,
+)
+
+
+def test_archive_exts_to_formats():
+    assert _exts_to_formats(["epub"]) == '"EPUB"'
+    assert _exts_to_formats(["pdf"]) == '"Text PDF"'
+    assert _exts_to_formats([]) == '"EPUB" OR "Text PDF"'
+
+
+def test_archive_normalize_formats_str_and_list():
+    assert _normalize_formats("EPUB") == ["epub"]
+    assert _normalize_formats(["EPUB", "Text PDF"]) == ["epub", "text pdf"]
+    assert _normalize_formats(None) == []
+
+
+def test_archive_file_ext_classification():
+    assert _file_ext({"format": "EPUB", "name": "book.epub"}) == "epub"
+    assert _file_ext({"format": "Text PDF", "name": "book.pdf"}) == "pdf"
+    assert _file_ext({"format": "Image Container PDF", "name": "scan.pdf"}) == "pdf"
+    # Falls back to the file extension when format is something else.
+    assert _file_ext({"format": "Archive BitTorrent", "name": "x.epub"}) == "epub"
+    assert _file_ext({"format": "Metadata", "name": "meta.xml"}) is None
+
+
+def test_archive_parse_docs_one_row_per_ext():
+    provider = ArchiveProvider()
+    docs = [
+        {"identifier": "item1", "title": "Both", "creator": ["A", "B"],
+         "format": ["EPUB", "Text PDF", "Abbyy GZ"]},
+        {"identifier": "item2", "title": "EpubOnly", "creator": "Solo", "format": "EPUB"},
+        {"title": "NoId", "format": "EPUB"},  # dropped: no identifier
+    ]
+    results = provider._parse_docs(docs, [])
+    # item1 -> epub + pdf, item2 -> epub
+    assert len(results) == 3
+    item1 = [r for r in results if r.extra["identifier"] == "item1"]
+    assert {r.ext for r in item1} == {"epub", "pdf"}
+    assert all(r.author == "A, B" for r in item1)  # list creator joined
+    assert all(r.source == "archive" for r in results)
+    assert all(r.cover_url.startswith("https://archive.org/services/img/") for r in results)
+
+
+def test_archive_parse_docs_respects_ext_filter():
+    provider = ArchiveProvider()
+    docs = [{"identifier": "item1", "title": "Both", "format": ["EPUB", "Text PDF"]}]
+    results = provider._parse_docs(docs, ["epub"])
+    assert len(results) == 1
+    assert results[0].ext == "epub"
+
+
+async def test_archive_resolve_candidates_smallest_first():
+    """Multiple EPUBs in an item resolve smallest-first (real text edition wins)."""
+    provider = ArchiveProvider()
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"files": [
+                {"name": "big scan.epub", "format": "EPUB", "size": "137000000"},
+                {"name": "real.epub", "format": "EPUB", "size": "1000000"},
+                {"name": "book.pdf", "format": "Text PDF", "size": "5000000"},
+                {"name": "meta.xml", "format": "Metadata", "size": "200"},
+            ]}
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw): return FakeResp()
+
+    result = SearchResult(
+        id="archive:item1:epub", title="T", ext="epub", source="archive",
+        extra={"identifier": "item1"},
+    )
+    with patch("app.providers.archive.httpx.AsyncClient", FakeClient):
+        plans = await provider.resolve_candidates(result)
+
+    # Only EPUB files, smallest first, name URL-encoded.
+    assert len(plans) == 2
+    assert plans[0].url.endswith("/real.epub")
+    assert "big%20scan.epub" in plans[1].url
+
+
+async def test_archive_resolve_no_matching_file_raises():
+    provider = ArchiveProvider()
+
+    class FakeResp:
+        status_code = 200
+        def json(self):
+            return {"files": [{"name": "book.pdf", "format": "Text PDF", "size": "5"}]}
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, url, **kw): return FakeResp()
+
+    result = SearchResult(
+        id="archive:item1:epub", title="T", ext="epub", source="archive",
+        extra={"identifier": "item1"},
+    )
+    with patch("app.providers.archive.httpx.AsyncClient", FakeClient):
+        with pytest.raises(RuntimeError, match="no epub file"):
+            await provider.resolve_candidates(result)

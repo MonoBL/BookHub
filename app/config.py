@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     VK_TOKEN: str = ""
     AA_API_KEY: str = ""
     LIBGEN_MIRRORS: str = "libgen.la,libgen.li,libgen.vg,libgen.gl"
+    # Internet Archive (archive.org): public API, no key. Good Portuguese stock.
+    ARCHIVE_ENABLED: bool = True
+    ARCHIVE_ROWS: int = 40
     PROVIDER_SEARCH_TIMEOUT_S: int = 30
     PROVIDER_RESOLVE_TIMEOUT_S: int = 30
 

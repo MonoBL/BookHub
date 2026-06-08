@@ -90,6 +90,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .badge-vk     { background: #1976d2; }
 .badge-annas  { background: #2e7d32; }
 .badge-libgen { background: #5d4037; }
+.badge-archive { background: #c75000; }
 .badge-info   { background: #444; }
 .badge-warn   { background: var(--warn); color: #000; }
 .badge-clean  { background: var(--ok); color: #000; }

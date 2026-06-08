@@ -45,7 +45,7 @@ async function api(path, options = {}) {
 // Starts at 400ms, backs off to 5s on long phases. Cap ~70 min so comic-mode
 // conversions (OCR every page) have time to finish.
 async function pollJob(jobId, onStatus) {
-  const TERMINAL = new Set(["clean", "blocked", "unverified", "error", "consumed"]);
+  const TERMINAL = new Set(["clean", "blocked", "unverified", "error", "consumed", "external"]);
   // Poll fast at first for snappy feedback, then ease off.
   let delay = 400;
   let elapsed = 0;

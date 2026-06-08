@@ -27,6 +27,7 @@ def _cover_host_allowed(host: str) -> bool:
     host = host.lower()
     allowed = {m.strip().lower() for m in settings.LIBGEN_MIRRORS.split(",") if m.strip()}
     allowed.add("annas-archive.org")
+    allowed.add("archive.org")
     return any(host == a or host.endswith("." + a) for a in allowed)
 
 _UUID4_RE = re.compile(

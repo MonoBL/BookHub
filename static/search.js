@@ -230,6 +230,14 @@ async function startDownload(idx, forceRescan = false) {
       statusEl.innerHTML =
         `<a href="/api/files/${jobId}" class="btn-download">✅ Download</a>` +
         vtSummary(job) + activeWarn;
+    } else if (job.status === "external") {
+      // File too large to pull through the server (e.g. archive.org comics).
+      // Hand the user the direct, public source link instead. Opens in a new
+      // tab and is not VirusTotal-scanned, so we say where it comes from.
+      statusEl.innerHTML =
+        `<a href="${esc(job.download_url)}" target="_blank" rel="noopener noreferrer" ` +
+        `class="btn-download">⬇ Get from Archive.org</a>` +
+        `<span class="stage"> ${esc(job.reason || "external download")}</span>`;
     } else if (IN_PROGRESS.has(job.status)) {
       // A re-scan re-downloads under the hood, but the user already had the
       // file once — don't replay the download stages, just show it's checking.
