@@ -231,7 +231,9 @@ async function startDownload(idx, forceRescan = false) {
         `<a href="/api/files/${jobId}" class="btn-download">✅ Download</a>` +
         vtSummary(job) + activeWarn;
     } else if (IN_PROGRESS.has(job.status)) {
-      const label = statusLabel(job);
+      // A re-scan re-downloads under the hood, but the user already had the
+      // file once — don't replay the download stages, just show it's checking.
+      const label = forceRescan ? "Re-scanning… this can take 1-2 min" : statusLabel(job);
       statusEl.innerHTML =
         `<span class="spinner"></span><span class="stage">${esc(label)}</span>` +
         `<span class="progress"></span>`;
