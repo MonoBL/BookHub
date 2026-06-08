@@ -612,6 +612,31 @@ async def test_archive_resolve_candidates_smallest_first():
     assert "big%20scan.epub" in plans[1].url
 
 
+async def test_archive_resolve_uses_precomputed_files_no_network():
+    """When search enriched extra['files'], resolve builds plans without HTTP."""
+    provider = ArchiveProvider()
+    result = SearchResult(
+        id="archive:item1:epub", title="T", ext="epub", source="archive",
+        extra={"identifier": "item1", "files": [
+            {"name": "real.epub", "size": 1000000},
+            {"name": "big scan.epub", "size": 137000000},
+        ]},
+    )
+
+    class BoomClient:  # any network use would raise
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def get(self, *a, **kw): raise AssertionError("must not hit network")
+
+    with patch("app.providers.archive.httpx.AsyncClient", BoomClient):
+        plans = await provider.resolve_candidates(result)
+
+    assert len(plans) == 2
+    assert plans[0].url.endswith("/real.epub")
+    assert plans[0].size_bytes == 1000000
+
+
 async def test_archive_resolve_no_matching_file_raises():
     provider = ArchiveProvider()
 

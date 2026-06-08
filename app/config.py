@@ -44,7 +44,10 @@ class Settings(BaseSettings):
     LIBGEN_MIRRORS: str = "libgen.la,libgen.li,libgen.vg,libgen.gl"
     # Internet Archive (archive.org): public API, no key. Good Portuguese stock.
     ARCHIVE_ENABLED: bool = True
-    ARCHIVE_ROWS: int = 40
+    ARCHIVE_ROWS: int = 25
+    # Search fans out one /metadata call per item to get real file sizes; cap the
+    # concurrency so a single search can't open too many sockets to archive.org.
+    ARCHIVE_METADATA_CONCURRENCY: int = 8
     PROVIDER_SEARCH_TIMEOUT_S: int = 30
     PROVIDER_RESOLVE_TIMEOUT_S: int = 30
 

@@ -6,6 +6,7 @@ Cloudflare gate and a clean public API, and carries a lot of Portuguese-language
 titles, so it complements the libgen/annas mirrors. See the example item
 archive.org/details/RapidoEDevagarDuasFormasDePensar (two EPUBs in one item).
 """
+import asyncio
 import logging
 from urllib.parse import quote, urlencode
 
@@ -76,7 +77,9 @@ class ArchiveProvider:
     async def search(self, query: str, ext_filter: list[str]) -> list[SearchResult]:
         fmt_clause = _exts_to_formats(ext_filter)
         # mediatype:texts keeps us out of audio/video/software; format:() ensures
-        # the item actually carries at least one file we can hand back.
+        # the item is indexed as carrying at least one file we can hand back.
+        # No sort -> relevance ranking, so a specific title isn't buried under
+        # high-download but loosely-matching items within the row cap.
         q = f"({query}) AND mediatype:texts AND format:({fmt_clause})"
         params = [
             ("q", q),
@@ -86,7 +89,6 @@ class ArchiveProvider:
             ("fl[]", "format"),
             ("rows", str(settings.ARCHIVE_ROWS)),
             ("page", "1"),
-            ("sort[]", "downloads desc"),
             ("output", "json"),
         ]
         url = f"{_BASE}/advancedsearch.php?{urlencode(params)}"
@@ -97,12 +99,57 @@ class ArchiveProvider:
             timeout=float(settings.PROVIDER_SEARCH_TIMEOUT_S),
         ) as client:
             r = await client.get(url)
+            if r.status_code >= 400:
+                raise RuntimeError(f"archive.org search HTTP {r.status_code}")
 
-        if r.status_code >= 400:
-            raise RuntimeError(f"archive.org search HTTP {r.status_code}")
+            docs = r.json().get("response", {}).get("docs", [])
+            results = self._parse_docs(docs, ext_filter)
+            # Fill in real per-file sizes (the search index only has whole-item
+            # size). One /metadata call per item, fanned out and capped; this
+            # also drops rows whose indexed format has no actual matching file.
+            return await self._enrich_sizes(results, client)
 
-        docs = r.json().get("response", {}).get("docs", [])
-        return self._parse_docs(docs, ext_filter)
+    async def _enrich_sizes(self, results, client) -> list[SearchResult]:
+        """Fetch /metadata per unique item, attach matching-file sizes + URLs.
+
+        Stores the resolved file list in extra["files"] (smallest first) so
+        resolve_candidates needs no second network call. A metadata failure
+        keeps the row with size unknown (resolve falls back to a live fetch).
+        """
+        identifiers = {r.extra["identifier"] for r in results}
+        sem = asyncio.Semaphore(settings.ARCHIVE_METADATA_CONCURRENCY)
+
+        async def fetch(identifier: str) -> tuple[str, list[dict]]:
+            async with sem:
+                try:
+                    mr = await client.get(f"{_BASE}/metadata/{quote(identifier, safe='')}")
+                    if mr.status_code >= 400:
+                        return identifier, []
+                    return identifier, mr.json().get("files", [])
+                except Exception:
+                    return identifier, []
+
+        meta = dict(await asyncio.gather(*(fetch(i) for i in identifiers)))
+
+        enriched: list[SearchResult] = []
+        for r in results:
+            files = meta.get(r.extra["identifier"]) or []
+            matched = [
+                {"name": f["name"], "size": _file_size(f)}
+                for f in files
+                if _file_ext(f) == r.ext and f.get("name")
+            ]
+            # A non-empty file list that yields no match means the indexed
+            # format had no real file -> drop. An empty list means the metadata
+            # fetch failed; keep the row and let resolve fetch live.
+            if files and not matched:
+                continue
+            matched.sort(key=lambda f: f["size"] if f["size"] is not None else 1 << 62)
+            update = {"extra": {**r.extra, "files": matched}}
+            if matched and matched[0]["size"] is not None:
+                update["size_bytes"] = matched[0]["size"]
+            enriched.append(r.model_copy(update=update))
+        return enriched
 
     def _parse_docs(self, docs: list[dict], ext_filter: list[str]) -> list[SearchResult]:
         wanted = set(ext_filter or ["epub", "pdf"])
@@ -146,17 +193,39 @@ class ArchiveProvider:
         return results
 
     async def resolve_candidates(self, result: SearchResult) -> list[DownloadPlan]:
-        """Fetch item metadata and return one plan per matching file, smallest first.
+        """Return one plan per matching file, smallest first.
 
         An item often holds several files of the same ext (e.g. a 137 MB scanned
         EPUB next to a 1 MB reflowable one). Smallest-first puts the real text
         edition ahead of the giant scan and keeps the first candidate under the
         download size cap. The downloader falls back across the list.
+
+        Search already enriched extra["files"] (name + size, smallest first) via
+        /metadata, so the common path needs no network call here; we only fetch
+        live when that list is missing (e.g. a stale job replayed after restart).
         """
         identifier = result.extra.get("identifier")
         if not identifier:
             raise RuntimeError(f"No identifier for archive result {result.id}")
 
+        files = result.extra.get("files")
+        if files is None:
+            files = await self._fetch_matching_files(identifier, result.ext)
+        if not files:
+            raise RuntimeError(f"archive.org: no {result.ext} file in {identifier}")
+
+        plans: list[DownloadPlan] = []
+        for f in files:
+            dl_url = f"{_BASE}/download/{quote(identifier, safe='')}/{quote(f['name'])}"
+            plans.append(DownloadPlan(
+                url=dl_url,
+                headers={"Referer": f"{_BASE}/details/{identifier}"},
+                size_bytes=f.get("size"),
+            ))
+        return plans
+
+    async def _fetch_matching_files(self, identifier: str, ext: str) -> list[dict]:
+        """Live /metadata fetch -> matching files [{name, size}], smallest first."""
         meta_url = f"{_BASE}/metadata/{quote(identifier, safe='')}"
         async with httpx.AsyncClient(
             headers={"User-Agent": _BROWSER_UA},
@@ -168,26 +237,13 @@ class ArchiveProvider:
         if r.status_code >= 400:
             raise RuntimeError(f"archive.org metadata HTTP {r.status_code}")
 
-        files = r.json().get("files", [])
-        matches = [
-            f for f in files
-            if _file_ext(f) == result.ext and f.get("name")
+        matched = [
+            {"name": f["name"], "size": _file_size(f)}
+            for f in r.json().get("files", [])
+            if _file_ext(f) == ext and f.get("name")
         ]
-        if not matches:
-            raise RuntimeError(f"archive.org: no {result.ext} file in {identifier}")
-
-        # Smallest first (unknown sizes sort last so real files win).
-        matches.sort(key=lambda f: _file_size(f) if _file_size(f) is not None else 1 << 62)
-
-        plans: list[DownloadPlan] = []
-        for f in matches:
-            dl_url = f"{_BASE}/download/{quote(identifier, safe='')}/{quote(f['name'])}"
-            plans.append(DownloadPlan(
-                url=dl_url,
-                headers={"Referer": f"{_BASE}/details/{identifier}"},
-                size_bytes=_file_size(f),
-            ))
-        return plans
+        matched.sort(key=lambda f: f["size"] if f["size"] is not None else 1 << 62)
+        return matched
 
     async def resolve(self, result: SearchResult) -> DownloadPlan:
         return (await self.resolve_candidates(result))[0]
