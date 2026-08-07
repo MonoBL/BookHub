@@ -1,4 +1,8 @@
 .env
+# Any env variant: .env.local, .env.prod, and the .env.bak-<date> copies made
+# before editing a live one. All of them hold real keys. .env.example does not.
+.env.*
+!.env.example
 data/
 .venv/
 __pycache__/
