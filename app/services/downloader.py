@@ -45,10 +45,15 @@ async def download(job_id: str, plan: DownloadPlan, ext: str) -> Path:
                 _stream(job_id, plan, dest, max_bytes),
                 timeout=abs_timeout,
             )
+        # A failed attempt leaves the job alone: it is one candidate out of
+        # several, the retry loop is still working, and an httpx error names the
+        # mirror host and the one-shot key. Writing that into the job would put
+        # it straight on the user's screen while the retry loop is still going.
+        # The raw detail goes to the log; the pipeline sanitises what the client
+        # sees once every candidate is spent.
         except asyncio.TimeoutError:
             dest.unlink(missing_ok=True)
-            await job_svc.update_job(job_id, status="error", reason="download timed out")
-            raise RuntimeError(f"Download timed out for job {job_id}")
+            raise RuntimeError("download timed out")
         except RuntimeError:
             raise
         except Exception as exc:
@@ -57,7 +62,7 @@ async def download(job_id: str, plan: DownloadPlan, ext: str) -> Path:
             # failure reasons in the logs and left the caller nothing to
             # classify. Fall back to the class name (e.g. "ReadTimeout").
             detail = str(exc) or type(exc).__name__
-            await job_svc.update_job(job_id, status="error", reason=detail)
+            logger.warning("download_attempt_failed job=%s detail=%s", job_id, detail)
             raise RuntimeError(detail)
 
     return dest
