@@ -345,3 +345,117 @@ async def test_force_rescan_skips_cache_and_forces_upload(tmp_path):
     assert upload_called is True
     assert cache_called is False
     assert lookup_called is False
+
+
+# ---------------------------------------------------------------------------
+# Large-file upload route (VT /files/upload_url)
+# ---------------------------------------------------------------------------
+
+async def test_over_32mb_uses_the_large_upload_url(tmp_path):
+    """A file above the 32 MB POST limit is sent to the one-shot bigfiles URL."""
+    import app.services.scanner as sc_mod
+
+    big = tmp_path / "big.epub"
+    big.write_bytes(b"x" * 16)
+
+    posted_to = []
+
+    # An accepted upload with no analysis id returns before the poll loop, so
+    # the test asserts on routing alone and never waits on a fake analysis.
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {}}
+
+    class FakeClient:
+        async def get(self, url, **kw):
+            raise AssertionError("upload_url should come from the patched helper")
+
+        async def post(self, url, **kw):
+            posted_to.append(url)
+            return FakeResponse()
+
+    async def fake_upload_url(client):
+        return "https://bigfiles.virustotal.com/_ah/upload/TOKEN"
+
+    with patch.object(sc_mod, "_VT_UPLOAD_CAP_BYTES", 8), \
+         patch.object(sc_mod, "_VT_LARGE_UPLOAD_CAP_BYTES", 1024), \
+         patch.object(sc_mod, "_vt_large_upload_url", fake_upload_url), \
+         patch.object(sc_mod, "_vt_daily_check", AsyncMock(return_value=True)), \
+         patch.object(sc_mod, "_vt_acquire", AsyncMock()), \
+         patch.object(sc_mod.settings, "VT_API_KEY", "k"):
+        await sc_mod._vt_upload_and_poll(big, "sha", FakeClient())
+
+    assert posted_to == ["https://bigfiles.virustotal.com/_ah/upload/TOKEN"]
+
+
+async def test_under_32mb_still_uses_the_plain_files_endpoint(tmp_path):
+    """Small files keep the direct POST /files path: no extra request needed."""
+    import app.services.scanner as sc_mod
+
+    small = tmp_path / "small.epub"
+    small.write_bytes(b"x" * 4)
+
+    posted_to = []
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {}}
+
+    class FakeClient:
+        async def post(self, url, **kw):
+            posted_to.append(url)
+            return FakeResponse()
+
+    async def boom(client):
+        raise AssertionError("must not ask for a large-upload URL")
+
+    with patch.object(sc_mod, "_VT_UPLOAD_CAP_BYTES", 8), \
+         patch.object(sc_mod, "_VT_LARGE_UPLOAD_CAP_BYTES", 1024), \
+         patch.object(sc_mod, "_vt_large_upload_url", boom), \
+         patch.object(sc_mod, "_vt_daily_check", AsyncMock(return_value=True)), \
+         patch.object(sc_mod, "_vt_acquire", AsyncMock()), \
+         patch.object(sc_mod.settings, "VT_API_KEY", "k"):
+        await sc_mod._vt_upload_and_poll(small, "sha", FakeClient())
+
+    assert posted_to == [f"{sc_mod._VT_BASE}/files"]
+
+
+async def test_beyond_the_large_cap_is_unverified(tmp_path):
+    """Past 650 MB there is no upload route left, so the file stays unverified."""
+    import app.services.scanner as sc_mod
+
+    huge = tmp_path / "huge.epub"
+    huge.write_bytes(b"x" * 64)
+
+    async def boom(client):
+        raise AssertionError("must not attempt an upload")
+
+    with patch.object(sc_mod, "_VT_UPLOAD_CAP_BYTES", 8), \
+         patch.object(sc_mod, "_VT_LARGE_UPLOAD_CAP_BYTES", 32), \
+         patch.object(sc_mod, "_vt_large_upload_url", boom):
+        verdict, stats, lad = await sc_mod._vt_upload_and_poll(huge, "sha", object())
+
+    assert verdict == "unverified"
+    assert stats == {}
+    assert lad is None
+
+
+async def test_large_upload_url_failure_is_not_fatal(tmp_path):
+    """If VT will not hand out a bigfiles URL, report unverified, never crash."""
+    import app.services.scanner as sc_mod
+
+    big = tmp_path / "big.epub"
+    big.write_bytes(b"x" * 16)
+
+    with patch.object(sc_mod, "_VT_UPLOAD_CAP_BYTES", 8), \
+         patch.object(sc_mod, "_VT_LARGE_UPLOAD_CAP_BYTES", 1024), \
+         patch.object(sc_mod, "_vt_large_upload_url", AsyncMock(return_value=None)):
+        verdict, stats, lad = await sc_mod._vt_upload_and_poll(big, "sha", object())
+
+    assert verdict == "unverified"

@@ -53,8 +53,12 @@ async def download(job_id: str, plan: DownloadPlan, ext: str) -> Path:
             raise
         except Exception as exc:
             dest.unlink(missing_ok=True)
-            await job_svc.update_job(job_id, status="error", reason=str(exc))
-            raise RuntimeError(str(exc))
+            # httpx timeout exceptions stringify to '', which produced blank
+            # failure reasons in the logs and left the caller nothing to
+            # classify. Fall back to the class name (e.g. "ReadTimeout").
+            detail = str(exc) or type(exc).__name__
+            await job_svc.update_job(job_id, status="error", reason=detail)
+            raise RuntimeError(detail)
 
     return dest
 

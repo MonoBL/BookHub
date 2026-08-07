@@ -104,7 +104,7 @@ ADMIN_PASSWORD=                # if set, bootstrap admin with it; else random+lo
 CLOUDFLARED_TOKEN=             # Option A: token for the cloudflared sidecar tunnel (§3.5)
 
 # --- limits ---
-DOWNLOAD_MAX_MB=32             # books larger than this CANNOT be VT-verified -> blocked. See §7.4.
+DOWNLOAD_MAX_MB=200            # keep <= 650: VT's large-file upload limit. Above it -> unverified. See §7.4.
 CONVERT_MAX_MB=200             # converter upload cap (user's own file, gVisor-sandboxed)
 FILE_TTL_MINUTES=60            # quarantine/ready file lifetime
 DOWNLOAD_CONCURRENCY=3
@@ -563,7 +563,8 @@ the boundaries are the converter sandbox (§8) and VT. Harden it against bombs:
 
 ### 7.4 VirusTotal scan (`services/scanner.py`) — strict, block-all-unscanned
 
-API v3, header `x-apikey`. Free tier: 4 req/min, **500/day**, 32 MB upload cap.
+API v3, header `x-apikey`. Free tier: 4 req/min, **500/day**, 32 MB direct upload
+(650 MB via the one-shot `GET /api/v3/files/upload_url` route).
 
 > **Policy (decided): a file is served ONLY with a fresh "clean" verdict.
 > Everything else is NOT served.** There is no `ALLOW_UNSCANNED_LARGE`. This is
@@ -583,7 +584,10 @@ API v3, header `x-apikey`. Free tier: 4 req/min, **500/day**, 32 MB upload cap.
        every 20–30s (counts against quota — poll sparingly), hard cap
        `asyncio.wait_for` ~4 min. On `completed` → map stats as above. On
        timeout → `unverified` (reason `scan_timeout`).
-     - file > 32 MB: cannot upload → `unverified` (reason `too_large`).
+     - file 32–650 MB: `GET /api/v3/files/upload_url` for a one-shot endpoint,
+       `POST` the file there, then poll as above. Upload timeout and poll budget
+       scale with size (~15 min cap), since big files queue longer at VT.
+     - file > 650 MB: no upload route left → `unverified` (reason `too_large`).
 4. Verdict handling:
    - `clean` → move `quarantine/ → ready/`, job `clean`, set
      `download_url = /api/files/{job_id}`. Cache verdict + freshness metadata.
@@ -593,10 +597,10 @@ API v3, header `x-apikey`. Free tier: 4 req/min, **500/day**, 32 MB upload cap.
    - `unverified` (too_large / scan_timeout / quota) → **delete file**, job
      `unverified`, carry the specific `reason`. Not served. For transient reasons
      (quota/timeout) the UI offers "retry later".
-   > Note: with `DOWNLOAD_MAX_MB=32` matching the VT cap, the `too_large` path is
-   > rare by construction. If Nuno later raises `DOWNLOAD_MAX_MB`, the 32–N MB
-   > band becomes permanently `unverified` (blocked) under this policy — that is
-   > the accepted cost of strict mode. Document it in the UI.
+   > Note: with `DOWNLOAD_MAX_MB` (200) below VT's 650 MB upload limit, the
+   > `too_large` path is unreachable by construction. It only opens up if
+   > `DOWNLOAD_MAX_MB` is raised past 650, which would leave the 650–N MB band
+   > permanently `unverified` (blocked) under this policy. Do not do that.
 5. **Rate + quota control:** a token bucket (4/min) wraps **all** VT calls
    (lookups AND analysis polls) using `asyncio.sleep`. Track a daily counter
    (reset at UTC midnight); when it reaches `VT_DAILY_CAP`, stop calling VT and
@@ -1069,8 +1073,13 @@ Definition of done per milestone: code + tests pass (`pytest`) + container build
   visibility.
 - VT free quota (500/day) can exhaust → strict policy means affected files become
   `unverified` (not served), with "retry later"; admin sees quota remaining.
-- Strict block-all-unscanned + `DOWNLOAD_MAX_MB=32` → books larger than 32 MB
-  cannot be VT-verified and won't download. Accepted cost of strict mode; tunable.
+- Strict block-all-unscanned + VT's 650 MB upload limit → books larger than that
+  cannot be VT-verified and won't download. Accepted cost of strict mode.
+- Every Libgen mirror hands out a `get.php` link that redirects to the same CDN
+  host per md5, so one dead host kills the whole candidate list. When that
+  happens the job retries the same title on archive.org (near-exact title match
+  only). A title that exists nowhere else stays unavailable until the CDN
+  recovers — nothing in our control.
 - Calibre PDF→EPUB quality varies on complex layouts — communicated in UI, not
   solvable for free on CPU.
 - gVisor adds a small per-conversion startup cost and needs the `runsc` runtime on

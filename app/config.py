@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     SESSION_TTL_DAYS: int = 7
 
     # limits
-    DOWNLOAD_MAX_MB: int = 32
+    # DOWNLOAD_MAX_MB: ceiling on what we pull through the server. Kept at or
+    # below VirusTotal's 650 MB large-file upload limit so every served file can
+    # still be scanned; anything above that could never be verified.
+    DOWNLOAD_MAX_MB: int = 200
     CONVERT_MAX_MB: int = 200
     IMAGE_MAX_MB: int = 50           # per-batch cap for image->BMP uploads
     BMP_MAX_FILES: int = 200         # max images per BMP batch

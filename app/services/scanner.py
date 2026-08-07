@@ -24,10 +24,17 @@ from app.services import jobs as job_svc
 
 logger = logging.getLogger("bookhub")
 
-# VirusTotal free tier: 4 requests/minute, 500/day, 32 MB upload cap.
+# VirusTotal free tier: 4 requests/minute, 500/day.
 _VT_RATE_LIMIT = 4  # requests per minute
-_VT_UPLOAD_CAP_BYTES = 32 * 1024 * 1024
 _VT_BASE = "https://www.virustotal.com/api/v3"
+
+# Upload limits. POST /files takes files up to 32 MB; past that VT wants a
+# one-shot URL from GET /files/upload_url, which accepts up to 650 MB and is
+# available on the free tier too. Without the second route anything over 32 MB
+# could never be verified, and the block-all-unscanned policy turned that into
+# a hard ceiling on book size.
+_VT_UPLOAD_CAP_BYTES = 32 * 1024 * 1024
+_VT_LARGE_UPLOAD_CAP_BYTES = 650 * 1024 * 1024
 
 # Scan concurrency semaphore.
 _scan_sem: asyncio.Semaphore | None = None
@@ -309,24 +316,56 @@ async def _vt_lookup(sha256: str, client: httpx.AsyncClient) -> tuple[Verdict, d
     return _map_stats(stats, lad, engines_total), stats, lad
 
 
+async def _vt_large_upload_url(client: httpx.AsyncClient) -> str | None:
+    """GET /api/v3/files/upload_url: a one-shot endpoint for files over 32 MB."""
+    if not await _vt_daily_check():
+        return None
+    await _vt_acquire()
+    try:
+        r = await client.get(
+            f"{_VT_BASE}/files/upload_url",
+            headers={"x-apikey": settings.VT_API_KEY},
+            timeout=30.0,
+        )
+    except Exception as exc:
+        logger.warning(json.dumps({"kind": "vt_upload_url_error", "detail": str(exc)}))
+        return None
+    if r.status_code != 200:
+        logger.warning(json.dumps({"kind": "vt_upload_url_error", "status": r.status_code}))
+        return None
+    return r.json().get("data") or None
+
+
 async def _vt_upload_and_poll(
     path: Path, sha256: str, client: httpx.AsyncClient
 ) -> tuple[Verdict, dict, str | None]:
-    """POST /api/v3/files then poll /api/v3/analyses/{id}."""
-    if path.stat().st_size > _VT_UPLOAD_CAP_BYTES:
+    """POST the file to VT then poll /api/v3/analyses/{id}."""
+    size = path.stat().st_size
+    if size > _VT_LARGE_UPLOAD_CAP_BYTES:
         return "unverified", {}, None  # reason = too_large handled by caller
+
+    upload_url = f"{_VT_BASE}/files"
+    if size > _VT_UPLOAD_CAP_BYTES:
+        upload_url = await _vt_large_upload_url(client)
+        if not upload_url:
+            return "unverified", {}, None
 
     if not await _vt_daily_check():
         return "unverified", {}, None
     await _vt_acquire()
 
+    # A 600 MB body over a slow link needs far longer than a 1 MB epub, and the
+    # analysis itself queues longer for big files. Scale both with size.
+    upload_timeout = 120.0 + (size / (1024 * 1024)) * 6.0
+    poll_budget = 240 if size <= _VT_UPLOAD_CAP_BYTES else 900
+
     try:
         with path.open("rb") as fh:
             r = await client.post(
-                f"{_VT_BASE}/files",
+                upload_url,
                 headers={"x-apikey": settings.VT_API_KEY},
                 files={"file": (path.name, fh, "application/octet-stream")},
-                timeout=120.0,
+                timeout=upload_timeout,
             )
     except Exception as exc:
         logger.warning(json.dumps({"kind": "vt_upload_error", "detail": str(exc)}))
@@ -339,9 +378,8 @@ async def _vt_upload_and_poll(
     if not analysis_id:
         return "unverified", {}, None
 
-    # Poll with a 4-minute hard cap.
     poll_url = f"{_VT_BASE}/analyses/{analysis_id}"
-    deadline = time.monotonic() + 240
+    deadline = time.monotonic() + poll_budget
 
     while time.monotonic() < deadline:
         await asyncio.sleep(25)
@@ -426,7 +464,7 @@ async def verify_and_scan(
             )
 
         async with httpx.AsyncClient() as client:
-            too_large = path.stat().st_size > _VT_UPLOAD_CAP_BYTES
+            too_large = path.stat().st_size > _VT_LARGE_UPLOAD_CAP_BYTES
 
             if force_rescan and not too_large:
                 # Skip the lookup entirely and request a fresh analysis.

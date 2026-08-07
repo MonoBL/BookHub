@@ -1,7 +1,9 @@
 """Job routes: POST /api/download, GET /api/jobs/{id}, GET /api/history,
 GET /api/downloads. See BUILD.md §7.1."""
 import asyncio
+import difflib
 import logging
+import unicodedata
 import uuid
 import re
 from datetime import datetime, timedelta, timezone
@@ -15,12 +17,27 @@ from app.config import settings
 from app.db import get_db, write_db
 from app.models import Job
 from app.providers import PROVIDERS
-from app.providers.base import SearchResult
+from app.providers.base import DownloadPlan, SearchResult
 from app.services import jobs as job_svc
 from app.services.downloader import download_with_fallback
 from app.services.scanner import verify_and_scan
 
 router = APIRouter()
+
+logger = logging.getLogger("bookhub")
+
+# Cross-provider fallback. Every Libgen mirror hands out a get.php link that
+# redirects to the same CDN host for a given md5, so one dead host takes the
+# whole candidate list down at once and no amount of in-provider retrying
+# helps. Rather than surface a bare failure, look the same book up on a
+# different provider. archive.org is the only safe target today: public,
+# no Cloudflare gate, stable URLs.
+_FALLBACK_SOURCES = ("archive",)
+# Near-exact title match only. A loose match would silently hand the user a
+# different book, which is worse than a clear failure.
+_FALLBACK_TITLE_MIN_RATIO = 0.85
+# How many of the best-matching hits to try resolving before giving up.
+_FALLBACK_MAX_CANDIDATES = 3
 
 _UUID4_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -65,43 +82,148 @@ async def start_download(
     return {"job_id": job_id}
 
 
+async def _resolve_plans(provider, result: SearchResult) -> list[DownloadPlan]:
+    # Providers that can yield multiple CDN hosts (Libgen) let the downloader
+    # fall back when one host 503s our server IP.
+    if hasattr(provider, "resolve_candidates"):
+        return await provider.resolve_candidates(result)
+    return [await provider.resolve(result)]
+
+
+async def _external_if_oversized(job_id: str, source: str, plans: list[DownloadPlan]) -> bool:
+    """Hand back the direct link for an oversized public file. True if handled.
+
+    Oversized public files (e.g. archive.org comics/scans) would only hit the
+    download size cap. Rather than fail, hand the user the direct link so they
+    fetch it straight from the source. Only for sources whose URLs are stable,
+    public and safe to share (archive.org); Libgen/AA links are one-shot,
+    gated, or behind Cloudflare and must keep going through us.
+    """
+    if source != "archive" or not plans:
+        return False
+    plan = plans[0]
+    cap = settings.DOWNLOAD_MAX_MB * 1024 * 1024
+    if not plan.size_bytes or plan.size_bytes <= cap:
+        return False
+    await job_svc.update_job(
+        job_id,
+        status="external",
+        download_url=plan.url,
+        reason=f"{plan.size_bytes // (1024 * 1024)} MB — too large to process here",
+    )
+    return True
+
+
+def _normalize_title(value: str) -> str:
+    """Accent-stripped, punctuation-free lowercase form for title comparison."""
+    decomposed = unicodedata.normalize("NFKD", value or "")
+    stripped = "".join(c for c in decomposed if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", " ", stripped.lower()).strip()
+
+
+async def _fallback_plans(
+    result: SearchResult, ext: str
+) -> tuple[list[DownloadPlan], str] | None:
+    """Locate the same book on another provider. Returns (plans, source) or None."""
+    wanted = _normalize_title(result.title)
+    if not wanted:
+        return None
+
+    for name in _FALLBACK_SOURCES:
+        if name == result.source:
+            continue
+        provider = next((p for p in PROVIDERS if p.name == name and p.enabled), None)
+        if not provider:
+            continue
+
+        try:
+            hits = await provider.search(result.title, [ext])
+        except Exception as exc:
+            logger.info("fallback_search_failed source=%s detail=%s", name, exc)
+            continue
+
+        scored = [
+            (difflib.SequenceMatcher(None, wanted, _normalize_title(h.title)).ratio(), h)
+            for h in hits
+            if h.ext == ext
+        ]
+        scored = [pair for pair in scored if pair[0] >= _FALLBACK_TITLE_MIN_RATIO]
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+
+        for _, hit in scored[:_FALLBACK_MAX_CANDIDATES]:
+            try:
+                plans = await _resolve_plans(provider, hit)
+            except Exception as exc:
+                logger.info("fallback_resolve_failed source=%s detail=%s", name, exc)
+                continue
+            if plans:
+                return plans, name
+
+    return None
+
+
+def _client_reason(exc: Exception) -> str:
+    """Client-safe failure reason. Never leaks mirror hosts, paths or keys."""
+    text = str(exc).lower()
+    if "timeout" in text or "timed out" in text:
+        return "The source did not respond. Try another result or retry later."
+    if any(code in text for code in ("500", "502", "503", "504")) or "server error" in text:
+        return "The source mirrors are down. Try another result or retry later."
+    if "no download candidates" in text or "resolve failed" in text:
+        return "No working download link for this result."
+    return "Download failed"
+
+
 async def _run_pipeline(
     job_id: str, result: SearchResult, provider, ext: str, force_rescan: bool = False
 ) -> None:
     try:
-        # Providers that can yield multiple CDN hosts (Libgen) let the
-        # downloader fall back when one host 503s our server IP.
-        if hasattr(provider, "resolve_candidates"):
-            plans = await provider.resolve_candidates(result)
-        else:
-            plans = [await provider.resolve(result)]
-
-        # Oversized public files (e.g. archive.org comics/scans) would only hit
-        # the download size cap. Rather than fail, hand the user the direct link
-        # so they fetch it straight from the source. Only for sources whose URLs
-        # are stable, public and safe to share (archive.org); Libgen/AA links are
-        # one-shot, gated, or behind Cloudflare and must keep going through us.
-        cap = settings.DOWNLOAD_MAX_MB * 1024 * 1024
-        if result.source == "archive" and plans and plans[0].size_bytes and plans[0].size_bytes > cap:
-            await job_svc.update_job(
-                job_id,
-                status="external",
-                download_url=plans[0].url,
-                reason=f"{plans[0].size_bytes // (1024 * 1024)} MB — too large to process here",
-            )
+        plans = await _resolve_plans(provider, result)
+        if await _external_if_oversized(job_id, result.source, plans):
             return
 
-        path = await download_with_fallback(job_id, plans, ext)
+        try:
+            path = await download_with_fallback(job_id, plans, ext)
+        except Exception as exc:
+            # Two distinct failures land here and both are worth a second
+            # source: a dead CDN, and a file over the size cap (archive.org
+            # often carries a small reflowable edition of the same title next
+            # to the giant scan, and resolve_candidates puts it first).
+            before = await job_svc.get_job(job_id)
+            was_blocked = bool(before and before.status == "blocked")
+            block_reason = before.reason if was_blocked else None
+
+            fallback = await _fallback_plans(result, ext)
+            if not fallback:
+                raise
+            alt_plans, alt_source = fallback
+            logger.info(
+                "cross_provider_fallback job=%s from=%s to=%s after=%s",
+                job_id, result.source, alt_source, exc,
+            )
+            if await _external_if_oversized(job_id, alt_source, alt_plans):
+                return
+            await job_svc.update_job(job_id, source=alt_source)
+            try:
+                path = await download_with_fallback(job_id, alt_plans, ext)
+            except Exception:
+                if was_blocked:
+                    # The substitute did not work out either, so put the
+                    # original verdict back: why the first file was rejected is
+                    # more useful than a vaguer transport error.
+                    await job_svc.update_job(
+                        job_id, status="blocked", reason=block_reason, source=result.source,
+                    )
+                raise
+
         await verify_and_scan(job_id, path, ext, force_rescan=force_rescan)
     except Exception as exc:
         current = await job_svc.get_job(job_id)
-        if current and current.status not in ("blocked", "unverified", "clean"):
-            # Log the real error server-side; show the client a generic reason
+        if current and current.status not in ("blocked", "unverified", "clean", "external"):
+            # Log the real error server-side; show the client a sanitised reason
             # so internal details (mirror hosts, paths) are never leaked.
-            logging.getLogger("bookhub").warning(
-                "download_pipeline_error job=%s detail=%s", job_id, exc
-            )
-            await job_svc.update_job(job_id, status="error", reason="Download failed")
+            logger.warning("download_pipeline_error job=%s detail=%s", job_id, exc)
+            await job_svc.update_job(job_id, status="error", reason=_client_reason(exc))
 
 
 @router.get("/jobs/{job_id}")

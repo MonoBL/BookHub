@@ -30,13 +30,15 @@ VM in the homelab. Single instance, a few users.
 - **Converter quality:** Calibre reflows text; it does **not** rebuild tables or
   multi-column layouts well. Novels/single-column PDFs convert cleanly; complex
   layouts are best-effort.
-- **Size cap:** with strict scanning, books larger than **32 MB** cannot be
-  VirusTotal-verified and therefore will **not** download. This is intentional;
-  tunable via `DOWNLOAD_MAX_MB` (raising it means the 32 MB+ band stays blocked
-  under strict mode).
+- **Size cap:** with strict scanning, books larger than **650 MB** cannot be
+  VirusTotal-verified and therefore will **not** download. That is VT's
+  large-file upload limit; the practical ceiling is `DOWNLOAD_MAX_MB`
+  (default 200), which must stay at or below it.
 - **Source fragility:** Libgen mirrors die/rotate and sit behind Cloudflare; VK
   `docs.search` can return access-denied for some tokens. The app fails soft and
-  leans on whichever sources are alive.
+  leans on whichever sources are alive. When every candidate from the chosen
+  source fails, the job retries the same title on archive.org, accepting only a
+  near-exact title match.
 
 ### Legal
 
@@ -149,7 +151,7 @@ Key settings (full list in `.env.example` / BUILD.md §2):
 | `VK_TOKEN` | VK user access token (optional; empty = VK disabled) |
 | `AA_API_KEY` | Anna's Archive donor key (optional; empty = HTML fallback) |
 | `LIBGEN_MIRRORS` | comma list of `.li`-family mirrors, reorderable |
-| `DOWNLOAD_MAX_MB` | download size cap (default 32, matches VT upload cap) |
+| `DOWNLOAD_MAX_MB` | download size cap (default 200; keep <= VT's 650 MB upload limit) |
 | `CONVERT_MAX_MB` | converter upload cap (default 200; user's own file) |
 | `FILE_TTL_MINUTES` | how long served/quarantined files live (default 60) |
 | `ADMIN_PASSWORD` | bootstrap admin password; if empty, a random one is logged once |
@@ -159,7 +161,8 @@ Key settings (full list in `.env.example` / BUILD.md §2):
 ### Get a VirusTotal API key (free)
 
 1. Create an account at virustotal.com → profile → **API key**.
-2. Paste into `VT_API_KEY`. Free tier: 4 req/min, 500/day, 32 MB upload.
+2. Paste into `VT_API_KEY`. Free tier: 4 req/min, 500/day, 32 MB direct upload
+   (650 MB via the `/files/upload_url` route, which the scanner uses automatically).
 
 ### Get a VK user token (optional)
 
@@ -284,8 +287,8 @@ kept minimal and tolerant. Pin `python:3.12-slim` by digest and pin pip versions
 |---------|--------------------|
 | Search returns nothing from Libgen | Mirror dead or under Cloudflare challenge → reorder `LIBGEN_MIRRORS`; check Events for "Cloudflare challenge" log lines. |
 | VK never returns results | Token denied (error 5/15) → re-mint a user token with `docs` scope; check admin provider health. |
-| Downloads stuck at "Checking (VirusTotal)" then "unverified" | VT daily quota hit, scan timed out, or file > 32 MB → see the `reason`; retry later for quota/timeout. |
-| Everything `unverified: too_large` | File exceeds `DOWNLOAD_MAX_MB` / VT's 32 MB upload cap — cannot be scanned under strict mode. |
+| Downloads stuck at "Checking (VirusTotal)" then "unverified" | VT daily quota hit, scan timed out, or file > 650 MB → see the `reason`; retry later for quota/timeout. |
+| Everything `unverified: too_large` | File exceeds `DOWNLOAD_MAX_MB` / VT's 650 MB upload limit — cannot be scanned under strict mode. |
 | Conversion fails immediately | Check the worker launched under `runsc`; verify `docker run --runtime=runsc hello-world` works on the VM. |
 | Conversion produces garbled text | Scanned PDF / wrong OCR language → pick the right `OCR_LANGS` (or per-job language); complex layouts/tables are best-effort. |
 | App logs everyone out on restart | Should not happen — sessions are opaque DB tokens, not signed cookies. If it does, check `data/app.db` is on the persistent volume. |
