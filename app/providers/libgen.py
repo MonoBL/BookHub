@@ -295,7 +295,10 @@ class LibgenProvider:
                 seen_hosts.add(host)
                 plans.append(DownloadPlan(
                     url=get_url,
-                    headers={"Referer": ads_url},
+                    # The CDN answers a non-browser User-Agent with HTTP 200 and
+                    # the nginx default welcome page instead of the file, so the
+                    # download must carry the same UA as the resolve.
+                    headers={"Referer": ads_url, "User-Agent": _BROWSER_UA},
                     cookies=dict(r.cookies),
                 ))
 

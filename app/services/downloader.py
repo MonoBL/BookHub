@@ -42,7 +42,7 @@ async def download(job_id: str, plan: DownloadPlan, ext: str) -> Path:
         await job_svc.update_job(job_id, status="downloading")
         try:
             await asyncio.wait_for(
-                _stream(job_id, plan, dest, max_bytes),
+                _stream(job_id, plan, dest, max_bytes, ext),
                 timeout=abs_timeout,
             )
         # A failed attempt leaves the job alone: it is one candidate out of
@@ -123,7 +123,29 @@ async def download_with_fallback(
     raise last_exc or RuntimeError("all download candidates failed")
 
 
-async def _stream(job_id: str, plan: DownloadPlan, dest: Path, max_bytes: int) -> None:
+# A dead Libgen CDN node answers get.php with HTTP 200 and the nginx default
+# welcome page instead of the file. Written to quarantine it reached the
+# scanner as a 638-byte "epub" and failed format verification, which is final:
+# the job ended as "blocked: not a real ZIP" and the retry loop never got to
+# try another candidate. Catching it here makes it an ordinary transient
+# failure, so the round-robin rides out the bad node like any other 503.
+_MAGIC = {
+    "epub": b"PK\x03\x04",
+    "pdf": b"%PDF-",
+}
+
+
+def _reject_non_file(ext: str, head: bytes) -> str | None:
+    """Return a failure reason if `head` is not the start of an `ext` file."""
+    magic = _MAGIC.get(ext)
+    if magic and not head.startswith(magic):
+        return f"source returned a non-{ext} payload"
+    return None
+
+
+async def _stream(
+    job_id: str, plan: DownloadPlan, dest: Path, max_bytes: int, ext: str
+) -> None:
     timeout = httpx.Timeout(connect=60.0, read=30.0, write=30.0, pool=5.0)
 
     async with httpx.AsyncClient(
@@ -143,10 +165,23 @@ async def _stream(job_id: str, plan: DownloadPlan, dest: Path, max_bytes: int) -
                 )
                 raise RuntimeError("exceeds size cap (content-length)")
 
+            ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ctype in ("text/html", "application/xhtml+xml"):
+                raise RuntimeError("source returned a web page, not a file")
+
             received = 0
+            head = b""
             with dest.open("wb") as fh:
                 async for chunk in r.aiter_bytes(chunk_size=65536):
                     received += len(chunk)
+                    if len(head) < 8:
+                        head += chunk[: 8 - len(head)]
+                        if len(head) >= 8:
+                            reason = _reject_non_file(ext, head)
+                            if reason:
+                                fh.close()
+                                dest.unlink(missing_ok=True)
+                                raise RuntimeError(reason)
                     if received > max_bytes:
                         fh.close()
                         dest.unlink(missing_ok=True)
@@ -155,3 +190,9 @@ async def _stream(job_id: str, plan: DownloadPlan, dest: Path, max_bytes: int) -
                         )
                         raise RuntimeError("exceeds size cap (streaming)")
                     fh.write(chunk)
+
+            # A file shorter than the sniff window never hit the check above.
+            reason = _reject_non_file(ext, head)
+            if reason:
+                dest.unlink(missing_ok=True)
+                raise RuntimeError(reason)

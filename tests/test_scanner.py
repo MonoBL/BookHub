@@ -252,6 +252,87 @@ async def test_download_size_cap_mid_stream(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Non-file payload from a dead mirror
+# ---------------------------------------------------------------------------
+
+async def _run_download_with_body(tmp_path, job_id, ext, body, content_type):
+    """Drive dl_mod.download against a canned response body."""
+    from unittest.mock import patch
+    import app.services.downloader as dl_mod
+    from app.providers.base import DownloadPlan
+    from app.models import Job
+    from app.services import jobs as job_svc
+
+    await job_svc.create_job(Job(id=job_id, status="queued", ext=ext, title="test"))
+    plan = DownloadPlan(url="http://fake.example/file." + ext)
+
+    class FakeResp:
+        status_code = 200
+        headers = {"content-length": str(len(body)), "content-type": content_type}
+
+        async def aiter_bytes(self, chunk_size=None):
+            yield body
+
+        def raise_for_status(self): pass
+
+    class FakeStream:
+        async def __aenter__(self): return FakeResp()
+        async def __aexit__(self, *a): pass
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        def stream(self, method, url): return FakeStream()
+
+    with patch("app.services.downloader.settings") as ms, \
+         patch("app.services.downloader.httpx.AsyncClient", FakeClient), \
+         patch("app.services.downloader._dl_sem", asyncio.Semaphore(1)):
+        ms.DOWNLOAD_MAX_MB = 200
+        ms.DOWNLOAD_CONCURRENCY = 1
+        ms.DATA_DIR = str(tmp_path)
+        with pytest.raises(RuntimeError) as exc:
+            await dl_mod.download(job_id, plan, ext)
+    return exc.value
+
+
+async def test_download_rejects_html_error_page(tmp_path):
+    """A mirror answering 200 with an HTML page must fail retryably, not block."""
+    from app.services import jobs as job_svc
+
+    job_id = "33333333-3333-4333-8333-333333333333"
+    exc = await _run_download_with_body(
+        tmp_path, job_id, "epub",
+        b"<!DOCTYPE html><html><body>Welcome to nginx!</body></html>",
+        "text/html; charset=UTF-8",
+    )
+    assert "not a file" in str(exc)
+
+    # Not "blocked": the retry loop must be free to try another candidate.
+    job = await job_svc.get_job(job_id)
+    assert job.status != "blocked"
+
+
+async def test_download_rejects_wrong_magic_bytes(tmp_path):
+    """A body served as octet-stream but not a ZIP must fail retryably too."""
+    from app.services import jobs as job_svc
+
+    job_id = "44444444-4444-4444-8444-444444444444"
+    exc = await _run_download_with_body(
+        tmp_path, job_id, "epub",
+        b"<!DOCTYPE html>\n<html><body>nope</body></html>",
+        "application/octet-stream",
+    )
+    assert "non-epub payload" in str(exc)
+
+    job = await job_svc.get_job(job_id)
+    assert job.status != "blocked"
+
+    # And the junk must not be left behind in quarantine.
+    assert not (tmp_path / "quarantine" / f"{job_id}.epub").exists()
+
+
+# ---------------------------------------------------------------------------
 # Serve-then-delete
 # ---------------------------------------------------------------------------
 

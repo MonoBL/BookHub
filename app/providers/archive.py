@@ -219,7 +219,10 @@ class ArchiveProvider:
             dl_url = f"{_BASE}/download/{quote(identifier, safe='')}/{quote(f['name'])}"
             plans.append(DownloadPlan(
                 url=dl_url,
-                headers={"Referer": f"{_BASE}/details/{identifier}"},
+                headers={
+                    "Referer": f"{_BASE}/details/{identifier}",
+                    "User-Agent": _BROWSER_UA,
+                },
                 size_bytes=f.get("size"),
             ))
         return plans

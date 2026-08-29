@@ -169,6 +169,8 @@ def _client_reason(exc: Exception) -> str:
         return "The source did not respond. Try another result or retry later."
     if any(code in text for code in ("500", "502", "503", "504")) or "server error" in text:
         return "The source mirrors are down. Try another result or retry later."
+    if "not a file" in text or "payload" in text:
+        return "The source served a broken file. Try another result or retry later."
     if "no download candidates" in text or "resolve failed" in text:
         return "No working download link for this result."
     return "Download failed"

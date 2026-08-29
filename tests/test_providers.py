@@ -272,6 +272,12 @@ async def test_libgen_resolve_candidates_dedupes_by_host():
     hosts = [urlsplit(p.url).netloc for p in plans]
     assert hosts == ["cdnA", "cdnB"]
 
+    # The CDN serves the nginx default page instead of the file when the
+    # download request carries a non-browser User-Agent, so every plan must
+    # carry the browser UA the resolve used.
+    from app.providers.libgen import _BROWSER_UA
+    assert all(p.headers.get("User-Agent") == _BROWSER_UA for p in plans)
+
 
 # --- download fallback across candidates ---
 
